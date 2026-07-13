@@ -43,9 +43,10 @@ struct file_info
  * Compare two tuples (type, id). Throw a descriptive error if either the
  * curr id is negative or if the data is not ordered.
  */
-type_id check_input(type_id const &last, type_id curr);
+type_id check_input(type_id const &last, type_id curr, bool temporal = false);
 
-type_id check_input(type_id const &last, osmium::OSMObject const &object);
+type_id check_input(type_id const &last, osmium::OSMObject const &object,
+                    bool temporal = false);
 
 /**
  * Prepare input file(s). Does format checks as far as this is possible
@@ -53,12 +54,14 @@ type_id check_input(type_id const &last, osmium::OSMObject const &object);
  */
 std::vector<osmium::io::File>
 prepare_input_files(std::vector<std::string> const &input_files,
-                    std::string const &input_format, bool append);
+                    std::string const &input_format, bool append,
+                    bool temporal = false);
 
 /**
  * Process the specified OSM files (stage 1a).
  */
 file_info process_files(std::vector<osmium::io::File> const &files,
-                        osmdata_t *osmdata, bool append, bool show_progress);
+                        osmdata_t *osmdata, bool append, bool show_progress,
+                        bool temporal = false);
 
 #endif // OSM2PGSQL_INPUT_HPP

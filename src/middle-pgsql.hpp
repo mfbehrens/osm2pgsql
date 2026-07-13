@@ -45,6 +45,9 @@ struct middle_pgsql_options
 
     // Store attributes (timestamp, version, changeset id, user id, user name)
     bool with_attributes = false;
+
+    // Store all object versions with valid_at tsrange (temporal tables)
+    bool with_temporal = false;
 };
 
 class middle_query_pgsql_t : public middle_query_t
@@ -178,6 +181,7 @@ private:
 
     void build_way_node_index();
     void build_relation_member_indexes();
+    void postprocess_valid_at();
 
     std::map<osmium::user_id_type, std::string> m_users;
     osmium::nwr_array<table_desc_t> m_tables;

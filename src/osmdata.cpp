@@ -30,7 +30,7 @@ osmdata_t::osmdata_t(std::shared_ptr<middle_t> mid,
 : m_mid(std::move(mid)), m_output(std::move(output)),
   m_connection_params(options.connection_params), m_bbox(options.bbox),
   m_num_procs(options.num_procs), m_append(options.append),
-  m_droptemp(options.droptemp)
+  m_droptemp(options.droptemp), m_temporal(options.temporal)
 {
     assert(m_mid);
     assert(m_output);
@@ -39,6 +39,13 @@ osmdata_t::osmdata_t(std::shared_ptr<middle_t> mid,
 
 void osmdata_t::node(osmium::Node const &node)
 {
+    if (m_temporal) {
+        // In temporal mode, pass all versions (including deleted) to the middle.
+        // Skip visibility/bbox checks and output — this is a raw data import.
+        m_mid->node(node);
+        return;
+    }
+
     if (node.visible()) {
         if (!node.location().valid()) {
             log_warn("Ignored node {} (version {}) with invalid location.",
@@ -75,6 +82,11 @@ void osmdata_t::node(osmium::Node const &node)
 void osmdata_t::after_nodes()
 {
     m_mid->after_nodes();
+
+    if (m_temporal) {
+        return;
+    }
+
     m_output->after_nodes();
 
     if (!m_append) {
@@ -91,6 +103,11 @@ void osmdata_t::after_nodes()
 
 void osmdata_t::way(osmium::Way &way)
 {
+    if (m_temporal) {
+        m_mid->way(way);
+        return;
+    }
+
     m_mid->way(way);
 
     if (way.deleted()) {
@@ -116,6 +133,11 @@ void osmdata_t::way(osmium::Way &way)
 void osmdata_t::after_ways()
 {
     m_mid->after_ways();
+
+    if (m_temporal) {
+        return;
+    }
+
     m_output->after_ways();
 
     if (!m_append) {
@@ -148,6 +170,11 @@ void osmdata_t::after_ways()
 
 void osmdata_t::relation(osmium::Relation const &rel)
 {
+    if (m_temporal) {
+        m_mid->relation(rel);
+        return;
+    }
+
     if (rel.members().size() > 32767) {
         log_warn(
             "Relation id {} ignored, because it has more than 32767 members",
@@ -177,6 +204,11 @@ void osmdata_t::relation(osmium::Relation const &rel)
 void osmdata_t::after_relations()
 {
     m_mid->after_relations();
+
+    if (m_temporal) {
+        return;
+    }
+
     m_output->after_relations();
 
     if (m_append) {
@@ -407,6 +439,14 @@ void osmdata_t::process_dependents()
 
 void osmdata_t::stop()
 {
+    if (m_temporal) {
+        // In temporal mode, no output processing needed.
+        // Just finalize the middle tables.
+        m_mid->stop();
+        m_mid->wait();
+        return;
+    }
+
     if (m_append) {
         process_dependents();
     }

@@ -47,7 +47,8 @@ void show_memory_usage()
 file_info run(options_t const &options, properties_t *properties)
 {
     auto const files = prepare_input_files(
-        options.input_files, options.input_format, options.append);
+        options.input_files, options.input_format, options.append,
+        options.temporal);
 
     auto thread_pool = std::make_shared<thread_pool_t>(
         options.parallel_indexing ? options.num_procs : 1U);
@@ -71,7 +72,8 @@ file_info run(options_t const &options, properties_t *properties)
     // Processing: In this phase the input file(s) are read and parsed,
     // populating some of the tables.
     auto finfo = process_files(files, &osmdata, options.append,
-                               get_logger().show_progress());
+                               get_logger().show_progress(),
+                               options.temporal);
 
     show_memory_usage();
 

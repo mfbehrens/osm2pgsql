@@ -117,6 +117,7 @@ private:
     unsigned int m_num_procs;
     bool m_append;
     bool m_droptemp;
+    bool m_temporal;
 };
 
 #endif // OSM2PGSQL_OSMDATA_HPP

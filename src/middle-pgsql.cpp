@@ -363,6 +363,15 @@ void middle_pgsql_t::copy_attributes(osmium::OSMObject const &obj)
         m_db_copy.add_null_column();
     }
 
+    if (m_store_options.with_temporal) {
+        if (obj.timestamp().valid()) {
+            m_db_copy.add_column(
+                fmt::format("[{},)", obj.timestamp().to_iso()));
+        } else {
+            m_db_copy.add_null_column();
+        }
+    }
+
     if (obj.changeset()) {
         m_db_copy.add_columns(obj.changeset());
     } else {
@@ -436,6 +445,13 @@ void middle_pgsql_t::node(osmium::Node const &node)
 {
     assert(m_middle_state == middle_state::node);
 
+    if (m_store_options.with_temporal) {
+        // In temporal mode, store all versions including deleted ones.
+        // No prior delete needed — PK is (id, version), each is unique.
+        node_set(node);
+        return;
+    }
+
     if (node.deleted()) {
         node_delete(node.id());
     } else {
@@ -449,6 +465,11 @@ void middle_pgsql_t::node(osmium::Node const &node)
 void middle_pgsql_t::way(osmium::Way const &way)
 {
     assert(m_middle_state == middle_state::way);
+
+    if (m_store_options.with_temporal) {
+        way_set(way);
+        return;
+    }
 
     if (way.deleted()) {
         way_delete(way.id());
@@ -464,6 +485,11 @@ void middle_pgsql_t::relation(osmium::Relation const &relation)
 {
     assert(m_middle_state == middle_state::relation);
 
+    if (m_store_options.with_temporal) {
+        relation_set(relation);
+        return;
+    }
+
     if (relation.deleted()) {
         relation_delete(relation.id());
     } else {
@@ -476,17 +502,21 @@ void middle_pgsql_t::relation(osmium::Relation const &relation)
 
 void middle_pgsql_t::node_set(osmium::Node const &node)
 {
-    m_cache->set(node.id(), node.location());
+    if (!m_store_options.with_temporal) {
+        m_cache->set(node.id(), node.location());
 
-    if (m_persistent_cache) {
-        m_persistent_cache->set(node.id(), node.location());
+        if (m_persistent_cache) {
+            m_persistent_cache->set(node.id(), node.location());
+        }
     }
 
     if (!m_store_options.nodes) {
         return;
     }
 
-    if (!m_store_options.untagged_nodes && node.tags().empty()) {
+    // In temporal mode, store all versions (including deleted/untagged).
+    if (!m_store_options.with_temporal && !m_store_options.untagged_nodes &&
+        node.tags().empty()) {
         return;
     }
 
@@ -726,7 +756,8 @@ namespace {
  * Build node in buffer from database results.
  */
 void build_node(osmid_t id, pg_result_t const &res, int res_num, int offset,
-                osmium::memory::Buffer *buffer, bool with_attributes)
+                osmium::memory::Buffer *buffer, bool with_attributes,
+                bool with_temporal)
 {
     osmium::builder::NodeBuilder builder{*buffer};
     builder.set_id(id);
@@ -744,7 +775,8 @@ void build_node(osmid_t id, pg_result_t const &res, int res_num, int offset,
  * Build way in buffer from database results.
  */
 void build_way(osmid_t id, pg_result_t const &res, int res_num, int offset,
-               osmium::memory::Buffer *buffer, bool with_attributes)
+               osmium::memory::Buffer *buffer, bool with_attributes,
+               bool with_temporal)
 {
     osmium::builder::WayBuilder builder{*buffer};
     builder.set_id(id);
@@ -767,7 +799,8 @@ bool middle_query_pgsql_t::node_get(osmid_t id,
         auto const res = m_db_connection.exec_prepared("get_node", id);
 
         if (res.num_tuples() == 1) {
-            build_node(id, res, 0, 0, buffer, m_store_options.with_attributes);
+            build_node(id, res, 0, 0, buffer, m_store_options.with_attributes,
+                       m_store_options.with_temporal);
             buffer->commit();
             return true;
         }
@@ -803,7 +836,8 @@ bool middle_query_pgsql_t::way_get(osmid_t id,
         return false;
     }
 
-    build_way(id, res, 0, 0, buffer, m_store_options.with_attributes);
+    build_way(id, res, 0, 0, buffer, m_store_options.with_attributes,
+              m_store_options.with_temporal);
 
     buffer->commit();
 
@@ -850,7 +884,8 @@ middle_query_pgsql_t::rel_members_get(osmium::Relation const &rel,
             for (int j = 0; j < res.num_tuples(); ++j) {
                 if (member.ref() == wayidspg[static_cast<std::size_t>(j)]) {
                     build_way(member.ref(), res, j, 1, buffer,
-                              m_store_options.with_attributes);
+                              m_store_options.with_attributes,
+                              m_store_options.with_temporal);
                     ++members_found;
                     break;
                 }
@@ -1026,30 +1061,33 @@ void middle_pgsql_t::start()
         log_debug("Setting up table 'nodes'");
         dbexec(R"(DROP TABLE IF EXISTS {schema}"{prefix}_nodes" CASCADE)");
         dbexec("CREATE {unlogged} TABLE {schema}\"{prefix}_nodes\" ("
-               " id int8 PRIMARY KEY {using_tablespace},"
+               " id int8 NOT NULL {using_tablespace},"
                " lat int4 NOT NULL,"
                " lon int4 NOT NULL,"
                "{attribute_columns_definition}"
-               " tags jsonb"
+               " tags jsonb,"
+               " {pk_definition}"
                ") {data_tablespace}");
     }
 
     log_debug("Setting up table 'ways'");
     dbexec(R"(DROP TABLE IF EXISTS {schema}"{prefix}_ways" CASCADE)");
     dbexec("CREATE {unlogged} TABLE {schema}\"{prefix}_ways\" ("
-           " id int8 PRIMARY KEY {using_tablespace},"
+           " id int8 NOT NULL {using_tablespace},"
            "{attribute_columns_definition}"
            " nodes int8[] NOT NULL,"
-           " tags jsonb"
+           " tags jsonb,"
+           " {pk_definition}"
            ") {data_tablespace}");
 
     log_debug("Setting up table 'rels'");
     dbexec(R"(DROP TABLE IF EXISTS {schema}"{prefix}_rels" CASCADE)");
     dbexec("CREATE {unlogged} TABLE {schema}\"{prefix}_rels\" ("
-           " id int8 PRIMARY KEY {using_tablespace},"
+           " id int8 NOT NULL {using_tablespace},"
            "{attribute_columns_definition}"
            " members jsonb NOT NULL,"
-           " tags jsonb"
+           " tags jsonb,"
+           " {pk_definition}"
            ") {data_tablespace}");
 
     if (m_store_options.with_attributes) {
@@ -1173,9 +1211,75 @@ void middle_pgsql_t::stop()
             table.drop_table(m_db_connection);
         }
     } else if (!m_options->append) {
+        // In temporal mode, postprocess valid_at ranges first because
+        // it drops and recreates tables (losing any existing indexes).
+        if (m_store_options.with_temporal) {
+            postprocess_valid_at();
+        }
         build_way_node_index();
         build_relation_member_indexes();
     }
+}
+
+void middle_pgsql_t::postprocess_valid_at()
+{
+    log_info("Post-processing valid_at end times...");
+
+    auto const do_table = [&](std::string const &table_name,
+                              std::string const &columns) {
+        // Build a new table with corrected valid_at ranges using a single
+        // CREATE TABLE AS SELECT. This is much faster than row-by-row UPDATE
+        // on large tables because it avoids MVCC overhead.
+        auto const tmp_name = table_name + "_new";
+
+        dbexec("CREATE TABLE {schema}\"" + tmp_name + "\" AS"
+               " SELECT " +
+               columns +
+               " FROM (SELECT *,"
+               "              lower(valid_at) AS valid_start,"
+               "              lead(lower(valid_at)) OVER"
+               "                (PARTITION BY id ORDER BY version)"
+               "                AS next_start"
+               "       FROM {schema}\"" +
+               table_name + "\") s");
+
+        // Swap: drop old, rename new.
+        dbexec("DROP TABLE {schema}\"" + table_name + "\" CASCADE");
+        dbexec("ALTER TABLE {schema}\"" + tmp_name +
+               "\" RENAME TO \"" + table_name + "\"");
+
+        // Recreate the primary key (CASCADE dropped it with the old table).
+        dbexec("ALTER TABLE {schema}\"" + table_name +
+               "\" ADD PRIMARY KEY (id, version)");
+    };
+
+    // When the next version has the same timestamp (common for
+    // closely-spaced edits), keep the range open because tsrange
+    // requires lower < upper.
+    std::string const close_range =
+        " CASE WHEN s.next_start IS NOT NULL"
+        "        AND s.next_start > s.valid_start"
+        "      THEN tsrange(s.valid_start, s.next_start)"
+        "      ELSE tsrange(s.valid_start, NULL)"
+        " END";
+
+    if (m_store_options.nodes) {
+        do_table(m_options->prefix + "_nodes",
+                 "s.id, s.lat, s.lon, s.created, s.version," +
+                 close_range +
+                 " AS valid_at,"
+                 " s.changeset_id, s.user_id, s.tags");
+    }
+    do_table(m_options->prefix + "_ways",
+             "s.id, s.created, s.version," + close_range +
+             " AS valid_at,"
+             " s.changeset_id, s.user_id, s.nodes, s.tags");
+    do_table(m_options->prefix + "_rels",
+             "s.id, s.created, s.version," + close_range +
+             " AS valid_at,"
+             " s.changeset_id, s.user_id, s.members, s.tags");
+
+    log_info("Post-processing done.");
 }
 
 void middle_pgsql_t::wait()
@@ -1207,7 +1311,24 @@ void init_params(params_t *params, options_t const &options)
                     "USING INDEX TABLESPACE " + options.tblsslim_index);
     }
 
-    if (options.extra_attributes) {
+    if (options.temporal) {
+        // Temporal mode: version and valid_at go into the attribute columns
+        // definition. Column order: created, version, valid_at, changeset_id,
+        // user_id.
+        params->set("attribute_columns_definition",
+                    " created timestamp with time zone,"
+                    " version int4,"
+                    " valid_at tsrange,"
+                    " changeset_id int4,"
+                    " user_id int4,");
+        params->set("attribute_columns_use",
+                    ", EXTRACT(EPOCH FROM created) AS created, version,"
+                    " valid_at, changeset_id, user_id, u.name");
+        params->set("users_table_access", "LEFT JOIN " + schema + '"' +
+                                              options.prefix +
+                                              "_users\" u ON o.user_id = u.id");
+        params->set("pk_definition", "PRIMARY KEY (id, version)");
+    } else if (options.extra_attributes) {
         params->set("attribute_columns_definition",
                     " created timestamp with time zone,"
                     " version int4,"
@@ -1219,10 +1340,12 @@ void init_params(params_t *params, options_t const &options)
         params->set("users_table_access", "LEFT JOIN " + schema + '"' +
                                               options.prefix +
                                               "_users\" u ON o.user_id = u.id");
+        params->set("pk_definition", "PRIMARY KEY (id)");
     } else {
         params->set("attribute_columns_definition", "");
         params->set("attribute_columns_use", "");
         params->set("users_table_access", "");
+        params->set("pk_definition", "PRIMARY KEY (id)");
     }
 }
 
@@ -1238,6 +1361,7 @@ middle_pgsql_t::middle_pgsql_t(std::shared_ptr<thread_pool_t> thread_pool,
   m_db_copy(m_copy_thread), m_append(options->append)
 {
     m_store_options.with_attributes = options->extra_attributes;
+    m_store_options.with_temporal = options->temporal;
 
     if (options->middle_with_nodes) {
         m_store_options.nodes = true;
@@ -1269,6 +1393,7 @@ void middle_pgsql_t::set_requirements(
     log_debug("  untagged_nodes: {}", m_store_options.untagged_nodes);
     log_debug("  use_flat_node_file: {}", m_store_options.use_flat_node_file);
     log_debug("  with_attributes: {}", m_store_options.with_attributes);
+    log_debug("  with_temporal: {}", m_store_options.with_temporal);
 }
 
 std::shared_ptr<middle_query_t> middle_pgsql_t::get_query_instance()

@@ -128,6 +128,7 @@ struct options_t
     bool append = false;                      ///< Append to existing data
     bool slim = false;                        ///< In slim mode
     bool extra_attributes = false;
+    bool temporal = false;
     bool keep_coastlines = false;
     bool droptemp = false; ///< drop slim mode temp tables after act
 

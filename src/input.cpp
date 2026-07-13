@@ -21,7 +21,7 @@
 #include "osmdata.hpp"
 #include "progress-display.hpp"
 
-type_id check_input(type_id const &last, type_id curr)
+type_id check_input(type_id const &last, type_id curr, bool temporal)
 {
     if (curr.id < 0) {
         throw fmt_error("Negative OSM object ids are not allowed: {} id {}.",
@@ -33,15 +33,19 @@ type_id check_input(type_id const &last, type_id curr)
             return curr;
         }
 
-        if (last.id > curr.id) {
-            throw fmt_error("Input data is not ordered: {} id {} after {}.",
-                            osmium::item_type_to_name(last.type), curr.id,
-                            last.id);
+        if (last.id == curr.id) {
+            if (temporal) {
+                // In temporal mode, same id is allowed (multiple versions)
+                return curr;
+            }
+            throw fmt_error("Input data is not ordered:"
+                            " {} id {} appears more than once.",
+                            osmium::item_type_to_name(last.type), curr.id);
         }
 
-        throw fmt_error("Input data is not ordered:"
-                        " {} id {} appears more than once.",
-                        osmium::item_type_to_name(last.type), curr.id);
+        throw fmt_error("Input data is not ordered: {} id {} after {}.",
+                        osmium::item_type_to_name(last.type), curr.id,
+                        last.id);
     }
 
     if (item_type_to_nwr_index(last.type) <=
@@ -54,9 +58,10 @@ type_id check_input(type_id const &last, type_id curr)
                     osmium::item_type_to_name(last.type));
 }
 
-type_id check_input(type_id const &last, osmium::OSMObject const &object)
+type_id check_input(type_id const &last, osmium::OSMObject const &object,
+                    bool temporal)
 {
-    return check_input(last, {object.type(), object.id()});
+    return check_input(last, {object.type(), object.id()}, temporal);
 }
 
 namespace {
@@ -68,11 +73,11 @@ namespace {
 class data_source_t
 {
 public:
-    explicit data_source_t(osmium::io::File const &file)
-    : m_reader(std::make_unique<osmium::io::Reader>(file))
+    explicit data_source_t(osmium::io::File const &file, bool temporal = false)
+    : m_reader(std::make_unique<osmium::io::Reader>(file)), m_temporal(temporal)
     {
         get_next_nonempty_buffer();
-        m_last = check_input(m_last, *m_it);
+        m_last = check_input(m_last, *m_it, m_temporal);
     }
 
     bool empty() const noexcept { return !m_buffer; }
@@ -88,7 +93,7 @@ public:
             }
         }
 
-        m_last = check_input(m_last, *m_it);
+        m_last = check_input(m_last, *m_it, m_temporal);
         return true;
     }
 
@@ -126,6 +131,7 @@ private:
     iterator m_it;
     iterator m_end;
     type_id m_last = {osmium::item_type::node, 0};
+    bool m_temporal;
 
 }; // class data_source_t
 
@@ -179,8 +185,9 @@ class input_context_t
 {
 public:
     input_context_t(osmdata_t *osmdata, progress_display_t *progress,
-                    bool append)
-    : m_osmdata(osmdata), m_progress(progress), m_append(append)
+                    bool append, bool temporal)
+    : m_osmdata(osmdata), m_progress(progress), m_append(append),
+      m_temporal(temporal)
     {
         assert(osmdata);
         assert(progress);
@@ -188,7 +195,7 @@ public:
 
     void apply(osmium::OSMObject *object)
     {
-        if (!m_append && object->deleted()) {
+        if (!m_append && !m_temporal && object->deleted()) {
             throw std::runtime_error{"Input file contains deleted objects but "
                                      "you are not in append mode."};
         }
@@ -230,10 +237,12 @@ private:
     progress_display_t *m_progress;
     osmium::item_type m_last_type = osmium::item_type::node;
     bool m_append;
+    bool m_temporal;
 }; // class input_context_t
 
 file_info process_single_file(osmium::io::File const &file, osmdata_t *osmdata,
-                              progress_display_t *progress, bool append)
+                              progress_display_t *progress, bool append,
+                              bool temporal)
 {
     file_info finfo;
 
@@ -241,10 +250,10 @@ file_info process_single_file(osmium::io::File const &file, osmdata_t *osmdata,
     finfo.header = reader.header();
     type_id last{osmium::item_type::node, 0};
 
-    input_context_t ctx{osmdata, progress, append};
+    input_context_t ctx{osmdata, progress, append, temporal};
     while (osmium::memory::Buffer buffer = reader.read()) {
         for (auto &object : buffer.select<osmium::OSMObject>()) {
-            last = check_input(last, object);
+            last = check_input(last, object, temporal);
             ctx.apply(&object);
             if (object.timestamp() > finfo.last_timestamp) {
                 finfo.last_timestamp = object.timestamp();
@@ -260,7 +269,8 @@ file_info process_single_file(osmium::io::File const &file, osmdata_t *osmdata,
 
 file_info process_multiple_files(std::vector<osmium::io::File> const &files,
                                  osmdata_t *osmdata,
-                                 progress_display_t *progress, bool append)
+                                 progress_display_t *progress, bool append,
+                                 bool temporal)
 {
     file_info finfo;
 
@@ -270,14 +280,14 @@ file_info process_multiple_files(std::vector<osmium::io::File> const &files,
     std::priority_queue<queue_element_t> queue;
 
     for (osmium::io::File const &file : files) {
-        data_sources.emplace_back(file);
+        data_sources.emplace_back(file, temporal);
 
         if (!data_sources.back().empty()) {
             queue.emplace(data_sources.back().get(), &data_sources.back());
         }
     }
 
-    input_context_t ctx{osmdata, progress, append};
+    input_context_t ctx{osmdata, progress, append, temporal};
     while (!queue.empty()) {
         auto element = queue.top();
         queue.pop();
@@ -306,7 +316,7 @@ file_info process_multiple_files(std::vector<osmium::io::File> const &files,
 
 std::vector<osmium::io::File>
 prepare_input_files(std::vector<std::string> const &input_files,
-                    std::string const &input_format, bool append)
+                    std::string const &input_format, bool append, bool temporal)
 {
     std::vector<osmium::io::File> files;
 
@@ -322,9 +332,10 @@ prepare_input_files(std::vector<std::string> const &input_files,
             throw fmt_error("Unknown file format '{}'.", input_format);
         }
 
-        if (!append && file.has_multiple_object_versions()) {
+        if (!append && !temporal && file.has_multiple_object_versions()) {
             throw std::runtime_error{
-                "Reading an OSM change file only works in append mode."};
+                "Reading an OSM change file only works in append mode."
+                " Use --temporal for .osh.pbf files in create mode."};
         }
 
         log_debug("Reading file: {}", filename);
@@ -336,15 +347,29 @@ prepare_input_files(std::vector<std::string> const &input_files,
 }
 
 file_info process_files(std::vector<osmium::io::File> const &files,
-                        osmdata_t *osmdata, bool append, bool show_progress)
+                        osmdata_t *osmdata, bool append, bool show_progress,
+                        bool temporal)
 {
     assert(osmdata);
 
     progress_display_t progress{show_progress};
 
-    if (files.size() == 1) {
-        return process_single_file(files.front(), osmdata, &progress, append);
+    // Temporal mode needs single-file processing to keep all versions
+    // (multi-file processing deduplicates by id, keeping only the latest)
+    if (temporal || files.size() == 1) {
+        file_info finfo;
+        for (auto const &file : files) {
+            auto const fi =
+                process_single_file(file, osmdata, &progress, append, temporal);
+            if (fi.last_timestamp > finfo.last_timestamp) {
+                finfo.last_timestamp = fi.last_timestamp;
+            }
+            if (!fi.header.empty()) {
+                finfo.header = fi.header;
+            }
+        }
+        return finfo;
     }
 
-    return process_multiple_files(files, osmdata, &progress, append);
+    return process_multiple_files(files, osmdata, &progress, append, temporal);
 }
