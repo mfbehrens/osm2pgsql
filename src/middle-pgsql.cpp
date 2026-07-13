@@ -351,7 +351,7 @@ void members_to_json(osmium::RelationMemberList const &members,
 
 void middle_pgsql_t::copy_attributes(osmium::OSMObject const &obj)
 {
-    // Format ISO timestamp once, reuse for both created and valid_at columns.
+    // Format ISO timestamp once, reuse for the created column.
     std::string iso_ts;
 
     if (obj.timestamp()) {
@@ -365,14 +365,6 @@ void middle_pgsql_t::copy_attributes(osmium::OSMObject const &obj)
         m_db_copy.add_column(obj.version());
     } else {
         m_db_copy.add_null_column();
-    }
-
-    if (m_store_options.with_temporal) {
-        if (!iso_ts.empty()) {
-            m_db_copy.add_open_tsrange(iso_ts);
-        } else {
-            m_db_copy.add_null_column();
-        }
     }
 
     if (obj.changeset()) {
@@ -1214,75 +1206,9 @@ void middle_pgsql_t::stop()
             table.drop_table(m_db_connection);
         }
     } else if (!m_options->append) {
-        // In temporal mode, postprocess valid_at ranges first because
-        // it drops and recreates tables (losing any existing indexes).
-        if (m_store_options.with_temporal) {
-            postprocess_valid_at();
-        }
         build_way_node_index();
         build_relation_member_indexes();
     }
-}
-
-void middle_pgsql_t::postprocess_valid_at()
-{
-    log_info("Post-processing valid_at end times...");
-
-    auto const do_table = [&](std::string const &table_name,
-                              std::string const &columns) {
-        // Build a new table with corrected valid_at ranges using a single
-        // CREATE TABLE AS SELECT. This is much faster than row-by-row UPDATE
-        // on large tables because it avoids MVCC overhead.
-        auto const tmp_name = table_name + "_new";
-
-        dbexec("CREATE TABLE {schema}\"" + tmp_name + "\" AS"
-               " SELECT " +
-               columns +
-               " FROM (SELECT *,"
-               "              lower(valid_at) AS valid_start,"
-               "              lead(lower(valid_at)) OVER"
-               "                (PARTITION BY id ORDER BY version)"
-               "                AS next_start"
-               "       FROM {schema}\"" +
-               table_name + "\") s");
-
-        // Swap: drop old, rename new.
-        dbexec("DROP TABLE {schema}\"" + table_name + "\" CASCADE");
-        dbexec("ALTER TABLE {schema}\"" + tmp_name +
-               "\" RENAME TO \"" + table_name + "\"");
-
-        // Recreate the primary key (CASCADE dropped it with the old table).
-        dbexec("ALTER TABLE {schema}\"" + table_name +
-               "\" ADD PRIMARY KEY (id, version)");
-    };
-
-    // When the next version has the same timestamp (common for
-    // closely-spaced edits), keep the range open because tsrange
-    // requires lower < upper.
-    std::string const close_range =
-        " CASE WHEN s.next_start IS NOT NULL"
-        "        AND s.next_start > s.valid_start"
-        "      THEN tsrange(s.valid_start, s.next_start)"
-        "      ELSE tsrange(s.valid_start, NULL)"
-        " END";
-
-    if (m_store_options.nodes) {
-        do_table(m_options->prefix + "_nodes",
-                 "s.id, s.lat, s.lon, s.created, s.version," +
-                 close_range +
-                 " AS valid_at,"
-                 " s.changeset_id, s.user_id, s.tags");
-    }
-    do_table(m_options->prefix + "_ways",
-             "s.id, s.created, s.version," + close_range +
-             " AS valid_at,"
-             " s.changeset_id, s.user_id, s.nodes, s.tags");
-    do_table(m_options->prefix + "_rels",
-             "s.id, s.created, s.version," + close_range +
-             " AS valid_at,"
-             " s.changeset_id, s.user_id, s.members, s.tags");
-
-    log_info("Post-processing done.");
 }
 
 void middle_pgsql_t::wait()
@@ -1315,18 +1241,16 @@ void init_params(params_t *params, options_t const &options)
     }
 
     if (options.temporal) {
-        // Temporal mode: version and valid_at go into the attribute columns
-        // definition. Column order: created, version, valid_at, changeset_id,
-        // user_id.
+        // Temporal mode: version goes into the attribute columns definition.
+        // Column order: created, version, changeset_id, user_id.
         params->set("attribute_columns_definition",
                     " created timestamp with time zone,"
                     " version int4,"
-                    " valid_at tsrange,"
                     " changeset_id int4,"
                     " user_id int4,");
         params->set("attribute_columns_use",
                     ", EXTRACT(EPOCH FROM created) AS created, version,"
-                    " valid_at, changeset_id, user_id, u.name");
+                    " changeset_id, user_id, u.name");
         params->set("users_table_access", "LEFT JOIN " + schema + '"' +
                                               options.prefix +
                                               "_users\" u ON o.user_id = u.id");

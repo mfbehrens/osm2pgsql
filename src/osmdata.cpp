@@ -40,9 +40,11 @@ osmdata_t::osmdata_t(std::shared_ptr<middle_t> mid,
 void osmdata_t::node(osmium::Node const &node)
 {
     if (m_temporal) {
-        // In temporal mode, pass all versions (including deleted) to the middle.
-        // Skip visibility/bbox checks and output — this is a raw data import.
+        // In temporal mode, pass all versions (including deleted) to both
+        // the middle and the output. Skip visibility/bbox checks because
+        // we want every historical version.
         m_mid->node(node);
+        m_output->node_add(node);
         return;
     }
 
@@ -84,6 +86,7 @@ void osmdata_t::after_nodes()
     m_mid->after_nodes();
 
     if (m_temporal) {
+        m_output->after_nodes();
         return;
     }
 
@@ -134,11 +137,11 @@ void osmdata_t::after_ways()
 {
     m_mid->after_ways();
 
+    m_output->after_ways();
+
     if (m_temporal) {
         return;
     }
-
-    m_output->after_ways();
 
     if (!m_append) {
         return;
@@ -205,11 +208,11 @@ void osmdata_t::after_relations()
 {
     m_mid->after_relations();
 
+    m_output->after_relations();
+
     if (m_temporal) {
         return;
     }
-
-    m_output->after_relations();
 
     if (m_append) {
         // Remove ids from changed relations in the input data from
@@ -439,15 +442,9 @@ void osmdata_t::process_dependents()
 
 void osmdata_t::stop()
 {
-    if (m_temporal) {
-        // In temporal mode, no output processing needed.
-        // Just finalize the middle tables.
-        m_mid->stop();
-        m_mid->wait();
-        return;
-    }
-
-    if (m_append) {
+    if (!m_append) {
+        // No process_dependents needed for initial import.
+    } else {
         process_dependents();
     }
 

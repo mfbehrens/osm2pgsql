@@ -182,7 +182,6 @@ private:
 
     void build_way_node_index();
     void build_relation_member_indexes();
-    void postprocess_valid_at();
 
     std::map<osmium::user_id_type, std::string> m_users;
     osmium::nwr_array<table_desc_t> m_tables;

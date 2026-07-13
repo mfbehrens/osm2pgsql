@@ -26,6 +26,7 @@ tables.pois = osm2pgsql.define_node_table('pois', {
     -- projection is Web Mercator (3857), so this will result in an SQL
     -- type `geometry(Point, 3857)`.
     { column = 'geom', type = 'point', not_null = true },
+    { column = 'valid_at', sql_type = 'tsrange' },
 })
 
 -- A special table for restaurants to demonstrate that we can have any tables
@@ -39,6 +40,7 @@ tables.restaurants = osm2pgsql.define_node_table('restaurants', {
     -- set. The result is that broken geometries will just be silently
     -- ignored.
     { column = 'geom', type = 'point', not_null = true },
+    { column = 'valid_at', sql_type = 'tsrange' },
 })
 
 -- This is a "way table", it can only contain data derived from ways and will
@@ -72,6 +74,8 @@ end
 -- attributes of the node like `id`, `version`, etc. as well as all tags as a
 -- Lua table (`object.tags`).
 function osm2pgsql.process_node(object)
+    local valid_at = object.valid_at -- only available in temporal mode
+
     if object.tags.amenity == 'restaurant' then
         -- Add a row to the SQL table. The keys in the parameter table
         -- correspond to the table columns, if one is missing the column will
@@ -79,14 +83,16 @@ function osm2pgsql.process_node(object)
         tables.restaurants:insert({
             name = object.tags.name,
             cuisine = object.tags.cuisine,
-            geom = object:as_point()
+            geom = object:as_point(),
+            valid_at = valid_at,
         })
     else
         tables.pois:insert({
             -- We know `tags` is of type `jsonb` so this will do the
             -- right thing.
             tags = object.tags,
-            geom = object:as_point()
+            geom = object:as_point(),
+            valid_at = valid_at,
         })
     end
 end

@@ -892,12 +892,21 @@ void output_flex_t::call_lua_function(prepared_lua_function_t func)
 }
 
 void output_flex_t::call_lua_function(prepared_lua_function_t func,
-                                      osmium::OSMObject const &object)
+                                       osmium::OSMObject const &object)
 {
     m_calling_context = func.context();
 
     lua_pushvalue(lua_state(), func.index());          // the function to call
     push_osm_object_to_lua_stack(lua_state(), object); // the single argument
+
+    // In temporal mode, add valid_at as a tsrange string to the object.
+    // The lower bound is the object timestamp, upper bound is open (infinity).
+    if (get_options() && get_options()->temporal && object.timestamp().valid()) {
+        std::string const ts = object.timestamp().to_iso();
+        std::string const valid_at = "[" + ts + ",)";
+        lua_pushstring(lua_state(), valid_at.c_str());
+        lua_setfield(lua_state(), -2, "valid_at");
+    }
 
     luaX_set_context(lua_state(), this);
     if (luaX_pcall(lua_state(), 1, func.nresults())) {
@@ -1085,6 +1094,45 @@ void output_flex_t::after_relations()
 
 void output_flex_t::stop()
 {
+    // In temporal mode, close open-ended valid_at ranges in output tables.
+    // This must happen before clustering/indexing.
+    if (get_options() && get_options()->temporal) {
+        for (auto const &table : *m_tables) {
+            bool has_valid_at = false;
+            for (auto const &col : table.columns()) {
+                if (col.name() == "valid_at" && col.sql_type_name() == "tsrange") {
+                    has_valid_at = true;
+                    break;
+                }
+            }
+            if (!has_valid_at) {
+                continue;
+            }
+            auto const id_cols = table.id_column_names();
+            auto const qname = qualified_name(table.schema(), table.name());
+            auto const close_sql = fmt::format(
+                "WITH next AS ("
+                "  SELECT {id}, lower(valid_at) AS ts,"
+                "    lead(lower(valid_at)) OVER"
+                "      (PARTITION BY {id} ORDER BY lower(valid_at))"
+                "      AS next_ts"
+                "  FROM {qname}"
+                ")"
+                "UPDATE {qname} t"
+                " SET valid_at = CASE"
+                "   WHEN n.next_ts IS NOT NULL AND n.next_ts > lower(t.valid_at)"
+                "   THEN tsrange(lower(t.valid_at), n.next_ts)"
+                "   ELSE t.valid_at"
+                " END"
+                " FROM next n"
+                " WHERE t.{id} = n.{id} AND lower(t.valid_at) = n.ts;",
+                fmt::arg("id", id_cols),
+                fmt::arg("qname", qname));
+            log_info("Closing valid_at ranges on table '{}'...", table.name());
+            m_db_connection.exec(close_sql);
+        }
+    }
+
     for (auto &table : m_table_connections) {
         table.task_set(thread_pool().submit([&]() {
             pg_conn_t const db_connection{get_options()->connection_params,
