@@ -74,7 +74,7 @@ end
 -- attributes of the node like `id`, `version`, etc. as well as all tags as a
 -- Lua table (`object.tags`).
 function osm2pgsql.process_node(object)
-    local valid_at = object.valid_at -- only available in temporal mode
+    local valid_at = object:valid_at() -- only returns a value in temporal mode
 
     if object.tags.amenity == 'restaurant' then
         -- Add a row to the SQL table. The keys in the parameter table

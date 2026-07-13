@@ -85,6 +85,7 @@ TRAMPOLINE(app_as_multipoint, as_multipoint)
 TRAMPOLINE(app_as_multilinestring, as_multilinestring)
 TRAMPOLINE(app_as_multipolygon, as_multipolygon)
 TRAMPOLINE(app_as_geometrycollection, as_geometrycollection)
+TRAMPOLINE(app_valid_at, valid_at)
 
 } // anonymous namespace
 
@@ -605,6 +606,39 @@ int output_flex_t::app_as_geometrycollection()
     return 1;
 }
 
+int output_flex_t::app_valid_at()
+{
+    check_context_and_state("valid_at", "node/way/relation",
+                            m_calling_context != calling_context::process_node &&
+                                m_calling_context != calling_context::process_way &&
+                                m_calling_context !=
+                                    calling_context::process_relation);
+
+    if (!get_options() || !get_options()->temporal) {
+        lua_pushnil(lua_state());
+        return 1;
+    }
+
+    osmium::OSMObject const *obj = nullptr;
+    if (m_calling_context == calling_context::process_node) {
+        obj = m_context_node;
+    } else if (m_calling_context == calling_context::process_way) {
+        obj = &m_way_cache.get();
+    } else {
+        obj = &m_relation_cache.get();
+    }
+
+    if (obj->timestamp().valid()) {
+        std::string const ts = obj->timestamp().to_iso();
+        std::string const valid_at = "[" + ts + ",)";
+        lua_pushlstring(lua_state(), valid_at.c_str(), valid_at.size());
+    } else {
+        lua_pushnil(lua_state());
+    }
+
+    return 1;
+}
+
 int output_flex_t::app_define_locator()
 {
     if (m_calling_context != calling_context::main) {
@@ -898,15 +932,6 @@ void output_flex_t::call_lua_function(prepared_lua_function_t func,
 
     lua_pushvalue(lua_state(), func.index());          // the function to call
     push_osm_object_to_lua_stack(lua_state(), object); // the single argument
-
-    // In temporal mode, add valid_at as a tsrange string to the object.
-    // The lower bound is the object timestamp, upper bound is open (infinity).
-    if (get_options() && get_options()->temporal && object.timestamp().valid()) {
-        std::string const ts = object.timestamp().to_iso();
-        std::string const valid_at = "[" + ts + ",)";
-        lua_pushstring(lua_state(), valid_at.c_str());
-        lua_setfield(lua_state(), -2, "valid_at");
-    }
 
     luaX_set_context(lua_state(), this);
     if (luaX_pcall(lua_state(), 1, func.nresults())) {
@@ -1495,7 +1520,8 @@ void output_flex_t::init_lua(std::string const &filename,
          {"as_multipoint", lua_trampoline_app_as_multipoint},
          {"as_multilinestring", lua_trampoline_app_as_multilinestring},
          {"as_multipolygon", lua_trampoline_app_as_multipolygon},
-         {"as_geometrycollection", lua_trampoline_app_as_geometrycollection}});
+         {"as_geometrycollection", lua_trampoline_app_as_geometrycollection},
+         {"valid_at", lua_trampoline_app_valid_at}});
 
     // Load compiled in init.lua
     if (luaL_dostring(lua_state(), lua_init())) {
