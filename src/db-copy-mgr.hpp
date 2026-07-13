@@ -107,6 +107,19 @@ public:
     void add_null_column() { m_current.buffer += "\\N\t"; }
 
     /**
+     * Add an open-ended tsrange column [iso_timestamp,).
+     *
+     * Writes directly to the COPY buffer without intermediate string
+     * allocation or per-character escaping (ISO timestamps are safe).
+     */
+    void add_open_tsrange(std::string const &iso_timestamp)
+    {
+        m_current.buffer += '[';
+        m_current.buffer += iso_timestamp;
+        m_current.buffer += ",)\t";
+    }
+
+    /**
      * Start an array column.
      *
      * An array is a list of simple elements of the same type.

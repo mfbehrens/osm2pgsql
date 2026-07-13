@@ -114,6 +114,8 @@ public:
 
     std::string const &json() const noexcept { return m_buffer; }
 
+    void clear() noexcept { m_buffer.clear(); }
+
 private:
     std::string m_buffer;
 };

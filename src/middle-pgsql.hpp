@@ -25,6 +25,7 @@
 
 #include "db-copy-mgr.hpp"
 #include "idlist.hpp"
+#include "json-writer.hpp"
 #include "middle.hpp"
 #include "params.hpp"
 #include "pgsql.hpp"
@@ -199,6 +200,9 @@ private:
 
     /// Options for this middle.
     middle_pgsql_options m_store_options;
+
+    /// Reused JSON writer for tags/members serialization (avoids per-row alloc).
+    json_writer_t m_json_writer;
 
     params_t m_params;
 

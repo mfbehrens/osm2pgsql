@@ -351,8 +351,12 @@ void members_to_json(osmium::RelationMemberList const &members,
 
 void middle_pgsql_t::copy_attributes(osmium::OSMObject const &obj)
 {
+    // Format ISO timestamp once, reuse for both created and valid_at columns.
+    std::string iso_ts;
+
     if (obj.timestamp()) {
-        m_db_copy.add_column(obj.timestamp().to_iso());
+        iso_ts = obj.timestamp().to_iso();
+        m_db_copy.add_column(iso_ts);
     } else {
         m_db_copy.add_null_column();
     }
@@ -364,9 +368,8 @@ void middle_pgsql_t::copy_attributes(osmium::OSMObject const &obj)
     }
 
     if (m_store_options.with_temporal) {
-        if (obj.timestamp().valid()) {
-            m_db_copy.add_column(
-                fmt::format("[{},)", obj.timestamp().to_iso()));
+        if (!iso_ts.empty()) {
+            m_db_copy.add_open_tsrange(iso_ts);
         } else {
             m_db_copy.add_null_column();
         }
@@ -392,9 +395,9 @@ void middle_pgsql_t::copy_tags(osmium::OSMObject const &obj)
         m_db_copy.add_null_column();
         return;
     }
-    json_writer_t writer;
-    tags_to_json(obj.tags(), &writer);
-    m_db_copy.add_column(writer.json());
+    m_json_writer.clear();
+    tags_to_json(obj.tags(), &m_json_writer);
+    m_db_copy.add_column(m_json_writer.json());
 }
 
 std::size_t middle_query_pgsql_t::get_way_node_locations_db(
@@ -917,9 +920,9 @@ void middle_pgsql_t::relation_set(osmium::Relation const &rel)
         copy_attributes(rel);
     }
 
-    json_writer_t writer;
-    members_to_json(rel.members(), &writer);
-    m_db_copy.add_column(writer.json());
+    m_json_writer.clear();
+    members_to_json(rel.members(), &m_json_writer);
+    m_db_copy.add_column(m_json_writer.json());
 
     copy_tags(rel);
 
