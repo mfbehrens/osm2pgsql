@@ -1332,22 +1332,49 @@ std::shared_ptr<middle_query_t> middle_pgsql_t::get_query_instance()
         m_store_options);
 
     if (m_store_options.nodes) {
-        mid->prepare("get_node_location",
-                     render_template(
-                         "SELECT id, lon, lat FROM {schema}\"{prefix}_nodes\""
-                         " WHERE id = $1::int8"));
+        if (m_store_options.with_temporal) {
+            mid->prepare("get_node_location",
+                         render_template(
+                             "SELECT DISTINCT ON (id) id, lon, lat"
+                             " FROM {schema}\"{prefix}_nodes\""
+                             " WHERE id = $1::int8"
+                             " ORDER BY id, version DESC"));
 
-        mid->prepare("get_node_list",
-                     render_template(
-                         "SELECT id, lon, lat FROM {schema}\"{prefix}_nodes\""
-                         " WHERE id = ANY($1::int8[])"));
+            mid->prepare("get_node_list",
+                         render_template(
+                             "SELECT DISTINCT ON (id) id, lon, lat"
+                             " FROM {schema}\"{prefix}_nodes\""
+                             " WHERE id = ANY($1::int8[])"
+                             " ORDER BY id, version DESC"));
+        } else {
+            mid->prepare("get_node_location",
+                         render_template(
+                             "SELECT id, lon, lat FROM {schema}\"{prefix}_nodes\""
+                             " WHERE id = $1::int8"));
 
-        mid->prepare(
-            "get_node",
-            render_template("SELECT lon, lat, tags{attribute_columns_use}"
-                            " FROM {schema}\"{prefix}_nodes\" o"
-                            " {users_table_access}"
-                            " WHERE o.id = $1::int8"));
+            mid->prepare("get_node_list",
+                         render_template(
+                             "SELECT id, lon, lat FROM {schema}\"{prefix}_nodes\""
+                             " WHERE id = ANY($1::int8[])"));
+        }
+
+        if (m_store_options.with_temporal) {
+            mid->prepare(
+                "get_node",
+                render_template("SELECT DISTINCT ON (o.id) lon, lat,"
+                                " tags{attribute_columns_use}"
+                                " FROM {schema}\"{prefix}_nodes\" o"
+                                " {users_table_access}"
+                                " WHERE o.id = $1::int8"
+                                " ORDER BY o.id, o.version DESC"));
+        } else {
+            mid->prepare(
+                "get_node",
+                render_template("SELECT lon, lat, tags{attribute_columns_use}"
+                                " FROM {schema}\"{prefix}_nodes\" o"
+                                " {users_table_access}"
+                                " WHERE o.id = $1::int8"));
+        }
     }
 
     mid->prepare("get_way",

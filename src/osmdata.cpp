@@ -108,6 +108,7 @@ void osmdata_t::way(osmium::Way &way)
 {
     if (m_temporal) {
         m_mid->way(way);
+        m_output->way_add(&way);
         return;
     }
 
@@ -175,6 +176,7 @@ void osmdata_t::relation(osmium::Relation const &rel)
 {
     if (m_temporal) {
         m_mid->relation(rel);
+        m_output->relation_add(rel);
         return;
     }
 

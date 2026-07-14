@@ -49,6 +49,7 @@ tables.restaurants = osm2pgsql.define_node_table('restaurants', {
 tables.ways = osm2pgsql.define_way_table('ways', {
     { column = 'tags', type = 'jsonb' },
     { column = 'geom', type = 'linestring', not_null = true },
+    { column = 'valid_at', sql_type = 'tsrange' },
 })
 
 -- This is an "area table", it can contain data derived from ways or relations
@@ -62,6 +63,7 @@ tables.polygons = osm2pgsql.define_area_table('polygons', {
     -- The type of the `geom` column is `geometry`, because we need to store
     -- polygons AND multipolygons
     { column = 'geom', type = 'geometry', not_null = true },
+    { column = 'valid_at', sql_type = 'tsrange' },
 })
 
 -- Debug output: Show definition of tables
@@ -101,18 +103,22 @@ end
 -- information as with nodes and additionally a boolean `is_closed` flag and
 -- the list of node IDs referenced by the way (`object.nodes`).
 function osm2pgsql.process_way(object)
+    local valid_at = object:valid_at()
+
     -- Very simple check to decide whether a way is a polygon or not, in a
     -- real stylesheet we'd have to also look at the tags...
     if object.is_closed then
         tables.polygons:insert({
             type = object.type,
             tags = object.tags,
-            geom = object:as_polygon()
+            geom = object:as_polygon(),
+            valid_at = valid_at,
         })
     else
         tables.ways:insert({
             tags = object.tags,
-            geom = object:as_linestring()
+            geom = object:as_linestring(),
+            valid_at = valid_at,
         })
     end
 end
@@ -121,13 +127,16 @@ end
 -- same information as with nodes and additionally an array of members
 -- (`object.members`).
 function osm2pgsql.process_relation(object)
+    local valid_at = object:valid_at()
+
     -- Store multipolygons and boundaries as polygons
     if object.tags.type == 'multipolygon' or
        object.tags.type == 'boundary' then
          tables.polygons:insert({
             type = object.type,
             tags = object.tags,
-            geom = object:as_multipolygon()
+            geom = object:as_multipolygon(),
+            valid_at = valid_at,
         })
     end
 end
