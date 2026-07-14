@@ -178,19 +178,21 @@ void push_osm_object_to_lua_stack(lua_State *lua_state,
                     luaX_add_table_str(lua_state, "role", member.role());
                 });
         }
-
-        lua_pushliteral(lua_state, "tags");
-        lua_createtable(lua_state, 0, (int)object.tags().size());
-        for (auto const &tag : object.tags()) {
-            luaX_add_table_str(lua_state, tag.key(), tag.value());
-        }
-        lua_rawset(lua_state, -3);
-
-        // Set the metatable of this object
-        lua_pushstring(lua_state, OSM2PGSQL_OSMOBJECT_CLASS);
-        lua_gettable(lua_state, LUA_REGISTRYINDEX);
-        lua_setmetatable(lua_state, -2);
     }
+
+    // Always push tags (empty table for deleted objects).
+    lua_pushliteral(lua_state, "tags");
+    lua_createtable(lua_state, 0, (int)object.tags().size());
+    for (auto const &tag : object.tags()) {
+        luaX_add_table_str(lua_state, tag.key(), tag.value());
+    }
+    lua_rawset(lua_state, -3);
+
+    // Set the metatable of this object (always, including for deleted objects,
+    // so that methods like valid_at() are available).
+    lua_pushstring(lua_state, OSM2PGSQL_OSMOBJECT_CLASS);
+    lua_gettable(lua_state, LUA_REGISTRYINDEX);
+    lua_setmetatable(lua_state, -2);
 }
 
 /**
@@ -926,7 +928,7 @@ void output_flex_t::call_lua_function(prepared_lua_function_t func)
 }
 
 void output_flex_t::call_lua_function(prepared_lua_function_t func,
-                                       osmium::OSMObject const &object)
+                                      osmium::OSMObject const &object)
 {
     m_calling_context = func.context();
 
@@ -1121,11 +1123,17 @@ void output_flex_t::stop()
 {
     // In temporal mode, close open-ended valid_at ranges in output tables.
     // This must happen before clustering/indexing.
+    //
+    // We use the middle table's `created` timestamps to find the next version's
+    // time, which handles deleted objects even if they aren't in the output
+    // table (e.g. deleted ways with no geometry).
     if (get_options() && get_options()->temporal) {
         for (auto const &table : *m_tables) {
             bool has_valid_at = false;
             for (auto const &col : table.columns()) {
-                if (col.name() == "valid_at" && col.sql_type_name() == "tsrange") {
+                if (col.name() == "valid_at" &&
+                    (col.sql_type_name() == "tsrange" ||
+                     col.sql_type_name() == "tstzrange")) {
                     has_valid_at = true;
                     break;
                 }
@@ -1135,25 +1143,51 @@ void output_flex_t::stop()
             }
             auto const id_cols = table.id_column_names();
             auto const qname = qualified_name(table.schema(), table.name());
+            auto const id_type = table.id_type();
+
+            std::string middle_subquery;
+            if (id_type == flex_table_index_type::node) {
+                middle_subquery =
+                    "SELECT id, version, created FROM planet_osm_nodes";
+            } else if (id_type == flex_table_index_type::way) {
+                middle_subquery =
+                    "SELECT id, version, created FROM planet_osm_ways";
+            } else if (id_type == flex_table_index_type::relation) {
+                middle_subquery =
+                    "SELECT id, version, created FROM planet_osm_rels";
+            } else if (id_type == flex_table_index_type::area) {
+                middle_subquery =
+                    "SELECT id, version, created FROM planet_osm_ways"
+                    " UNION ALL"
+                    " SELECT -id AS id, version, created"
+                    " FROM planet_osm_rels";
+            } else {
+                // Skip tables without a known id type
+                continue;
+            }
+
             auto const close_sql = fmt::format(
-                "WITH next AS ("
-                "  SELECT {id}, lower(valid_at) AS ts,"
-                "    lead(lower(valid_at)) OVER"
-                "      (PARTITION BY {id} ORDER BY lower(valid_at))"
-                "      AS next_ts"
-                "  FROM {qname}"
+                "WITH middle_next AS ("
+                "  SELECT m.id, m.version, m.created,"
+                "    lead(m.created) OVER"
+                "      (PARTITION BY m.id ORDER BY m.version)"
+                "      AS next_created"
+                "  FROM ({middle}) m"
                 ")"
                 "UPDATE {qname} t"
-                " SET valid_at = CASE"
-                "   WHEN n.next_ts IS NOT NULL AND n.next_ts > lower(t.valid_at)"
-                "   THEN tsrange(lower(t.valid_at), n.next_ts)"
-                "   ELSE t.valid_at"
-                " END"
-                " FROM next n"
-                " WHERE t.{id} = n.{id} AND lower(t.valid_at) = n.ts;",
+                " SET valid_at = tstzrange("
+                "   lower(t.valid_at),"
+                "   mn.next_created)"
+                " FROM middle_next mn"
+                " WHERE t.{id} = mn.id"
+                "   AND lower(t.valid_at) = mn.created"
+                "   AND mn.next_created IS NOT NULL"
+                "   AND mn.next_created > lower(t.valid_at);",
+                fmt::arg("middle", middle_subquery),
                 fmt::arg("id", id_cols),
                 fmt::arg("qname", qname));
-            log_info("Closing valid_at ranges on table '{}'...", table.name());
+            log_info("Closing valid_at ranges on table '{}'...",
+                     table.name());
             m_db_connection.exec(close_sql);
         }
     }

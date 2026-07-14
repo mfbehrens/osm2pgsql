@@ -40,11 +40,14 @@ osmdata_t::osmdata_t(std::shared_ptr<middle_t> mid,
 void osmdata_t::node(osmium::Node const &node)
 {
     if (m_temporal) {
-        // In temporal mode, pass all versions (including deleted) to both
-        // the middle and the output. Skip visibility/bbox checks because
-        // we want every historical version.
+        // In temporal mode, pass all versions to the middle, but only
+        // non-deleted versions to the output. The closing SQL uses the
+        // middle table's lead() to close ranges, so it doesn't need
+        // deleted objects in the output.
         m_mid->node(node);
-        m_output->node_add(node);
+        if (!node.deleted()) {
+            m_output->node_add(node);
+        }
         return;
     }
 
@@ -108,7 +111,9 @@ void osmdata_t::way(osmium::Way &way)
 {
     if (m_temporal) {
         m_mid->way(way);
-        m_output->way_add(&way);
+        if (!way.deleted()) {
+            m_output->way_add(&way);
+        }
         return;
     }
 
@@ -176,7 +181,9 @@ void osmdata_t::relation(osmium::Relation const &rel)
 {
     if (m_temporal) {
         m_mid->relation(rel);
-        m_output->relation_add(rel);
+        if (!rel.deleted()) {
+            m_output->relation_add(rel);
+        }
         return;
     }
 

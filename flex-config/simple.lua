@@ -26,7 +26,6 @@ tables.pois = osm2pgsql.define_node_table('pois', {
     -- projection is Web Mercator (3857), so this will result in an SQL
     -- type `geometry(Point, 3857)`.
     { column = 'geom', type = 'point', not_null = true },
-    { column = 'valid_at', sql_type = 'tsrange' },
 })
 
 -- A special table for restaurants to demonstrate that we can have any tables
@@ -40,7 +39,6 @@ tables.restaurants = osm2pgsql.define_node_table('restaurants', {
     -- set. The result is that broken geometries will just be silently
     -- ignored.
     { column = 'geom', type = 'point', not_null = true },
-    { column = 'valid_at', sql_type = 'tsrange' },
 })
 
 -- This is a "way table", it can only contain data derived from ways and will
@@ -49,7 +47,6 @@ tables.restaurants = osm2pgsql.define_node_table('restaurants', {
 tables.ways = osm2pgsql.define_way_table('ways', {
     { column = 'tags', type = 'jsonb' },
     { column = 'geom', type = 'linestring', not_null = true },
-    { column = 'valid_at', sql_type = 'tsrange' },
 })
 
 -- This is an "area table", it can contain data derived from ways or relations
@@ -63,7 +60,6 @@ tables.polygons = osm2pgsql.define_area_table('polygons', {
     -- The type of the `geom` column is `geometry`, because we need to store
     -- polygons AND multipolygons
     { column = 'geom', type = 'geometry', not_null = true },
-    { column = 'valid_at', sql_type = 'tsrange' },
 })
 
 -- Debug output: Show definition of tables
@@ -76,8 +72,6 @@ end
 -- attributes of the node like `id`, `version`, etc. as well as all tags as a
 -- Lua table (`object.tags`).
 function osm2pgsql.process_node(object)
-    local valid_at = object:valid_at() -- only returns a value in temporal mode
-
     if object.tags.amenity == 'restaurant' then
         -- Add a row to the SQL table. The keys in the parameter table
         -- correspond to the table columns, if one is missing the column will
@@ -85,16 +79,14 @@ function osm2pgsql.process_node(object)
         tables.restaurants:insert({
             name = object.tags.name,
             cuisine = object.tags.cuisine,
-            geom = object:as_point(),
-            valid_at = valid_at,
+            geom = object:as_point()
         })
     else
         tables.pois:insert({
             -- We know `tags` is of type `jsonb` so this will do the
             -- right thing.
             tags = object.tags,
-            geom = object:as_point(),
-            valid_at = valid_at,
+            geom = object:as_point()
         })
     end
 end
@@ -103,22 +95,18 @@ end
 -- information as with nodes and additionally a boolean `is_closed` flag and
 -- the list of node IDs referenced by the way (`object.nodes`).
 function osm2pgsql.process_way(object)
-    local valid_at = object:valid_at()
-
     -- Very simple check to decide whether a way is a polygon or not, in a
     -- real stylesheet we'd have to also look at the tags...
     if object.is_closed then
         tables.polygons:insert({
             type = object.type,
             tags = object.tags,
-            geom = object:as_polygon(),
-            valid_at = valid_at,
+            geom = object:as_polygon()
         })
     else
         tables.ways:insert({
             tags = object.tags,
-            geom = object:as_linestring(),
-            valid_at = valid_at,
+            geom = object:as_linestring()
         })
     end
 end
@@ -127,16 +115,13 @@ end
 -- same information as with nodes and additionally an array of members
 -- (`object.members`).
 function osm2pgsql.process_relation(object)
-    local valid_at = object:valid_at()
-
     -- Store multipolygons and boundaries as polygons
     if object.tags.type == 'multipolygon' or
        object.tags.type == 'boundary' then
          tables.polygons:insert({
             type = object.type,
             tags = object.tags,
-            geom = object:as_multipolygon(),
-            valid_at = valid_at,
+            geom = object:as_multipolygon()
         })
     end
 end

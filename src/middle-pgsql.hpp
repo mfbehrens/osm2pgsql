@@ -200,9 +200,6 @@ private:
     /// Options for this middle.
     middle_pgsql_options m_store_options;
 
-    /// Reused JSON writer for tags/members serialization (avoids per-row alloc).
-    json_writer_t m_json_writer;
-
     params_t m_params;
 
     bool m_append;
