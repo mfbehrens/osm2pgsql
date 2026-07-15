@@ -460,6 +460,9 @@ void osmdata_t::stop()
     // Run stage 2 processing: Reprocess objects marked in stage 1 (if any).
     m_output->reprocess_marked();
 
+    // Create temporary temporal tables before freeing middle references.
+    m_output->prepare_temporal();
+
     // Run postprocessing on database: Clustering and index creation.
     m_output->free_middle_references();
 

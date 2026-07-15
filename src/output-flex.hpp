@@ -122,6 +122,8 @@ public:
     void stop() override;
     void sync() override;
 
+    void prepare_temporal() override;
+
     void after_nodes() override;
     void after_ways() override;
     void after_relations() override;

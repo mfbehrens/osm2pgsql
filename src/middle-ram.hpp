@@ -23,7 +23,9 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 class node_persistent_cache_t;
 class thread_pool_t;
@@ -83,6 +85,9 @@ public:
 
     void set_requirements(output_requirements const &requirements) override;
 
+    void create_temporal_tables(pg_conn_t &conn,
+                                std::string const &prefix) const override;
+
 private:
     struct middle_ram_options
     {
@@ -103,12 +108,29 @@ private:
 
         // Store relations (with tags, attributes, and members) in object store.
         bool relations = false;
+
+        // Temporal mode: store all object versions.
+        bool temporal = false;
     };
 
     void store_object(osmium::OSMObject const &object);
 
+    /// Store an object in temporal mode (allows multiple versions per id).
+    void store_object_temporal(osmium::OSMObject const &object);
+
     bool get_object(osmium::item_type type, osmid_t id,
                     osmium::memory::Buffer *buffer) const;
+
+    /// Get the latest version of an object in temporal mode.
+    bool get_object_temporal(osmium::item_type type, osmid_t id,
+                             osmium::memory::Buffer *buffer) const;
+
+    struct temporal_metadata_t
+    {
+        osmid_t id;
+        uint32_t version;
+        osmium::Timestamp created;
+    };
 
     /// For storing the location of all nodes.
     node_locations_t m_node_locations;
@@ -131,6 +153,21 @@ private:
 
     /// File cache
     std::shared_ptr<node_persistent_cache_t> m_persistent_cache;
+
+    // Temporal mode data structures
+
+    /// Node locations for temporal mode (latest version per id).
+    std::unordered_map<osmid_t, osmium::Location> m_temporal_node_locations;
+
+    /// Object index for temporal mode: maps id to buffer offset (latest version).
+    std::unordered_map<osmid_t, std::size_t> m_temporal_node_index;
+    std::unordered_map<osmid_t, std::size_t> m_temporal_way_index;
+    std::unordered_map<osmid_t, std::size_t> m_temporal_rel_index;
+
+    /// Temporal metadata for closing valid_at ranges.
+    std::vector<temporal_metadata_t> m_temporal_node_metadata;
+    std::vector<temporal_metadata_t> m_temporal_way_metadata;
+    std::vector<temporal_metadata_t> m_temporal_rel_metadata;
 
 }; // class middle_ram_t
 

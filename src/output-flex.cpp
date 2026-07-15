@@ -1119,6 +1119,17 @@ void output_flex_t::after_relations()
     flush_tables(m_table_connections);
 }
 
+void output_flex_t::prepare_temporal()
+{
+    if (!get_options() || !get_options()->temporal || get_options()->slim) {
+        return;
+    }
+
+    // In non-slim temporal mode, create temporary tables with temporal
+    // metadata from the RAM middle, so the closure SQL in stop() can work.
+    middle().create_temporal_tables(m_db_connection, get_options()->prefix);
+}
+
 void output_flex_t::stop()
 {
     // In temporal mode, close open-ended valid_at ranges in output tables.

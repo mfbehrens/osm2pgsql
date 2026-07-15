@@ -132,7 +132,7 @@ void parse_expire_tiles_param(char const *arg, uint32_t *expire_tiles_zoom_min,
 void check_options_non_slim(CLI::App const &app)
 {
     std::vector<std::string> const slim_options = {
-        "--cache", "--middle-schema", "--middle-with-nodes", "--temporal",
+        "--cache", "--middle-schema", "--middle-with-nodes",
         "--tablespace-slim-data", "--tablespace-slim-index"};
 
     for (auto const &opt : slim_options) {
@@ -223,10 +223,6 @@ void check_options(options_t *options)
     }
 
     if (options->temporal) {
-        if (!options->slim) {
-            throw std::runtime_error{
-                "--temporal can only be used with --slim mode."};
-        }
         if (!options->extra_attributes) {
             throw std::runtime_error{
                 "--temporal requires --extra-attributes (-x)."};
@@ -542,7 +538,7 @@ options_t parse_command_line(int argc, char *argv[])
     app.add_flag("--temporal", options.temporal)
         ->description("Store all object versions with valid_at tsrange column"
                       " for PostgreSQL temporal table support. Requires"
-                      " --slim and --extra-attributes.")
+                      " --extra-attributes.")
         ->group("Middle options");
 
     // ----------------------------------------------------------------------

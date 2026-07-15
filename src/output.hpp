@@ -64,6 +64,12 @@ public:
     virtual void stop() = 0;
     virtual void sync() = 0;
 
+    /**
+     * Create temporary tables with temporal metadata from the middle,
+     * if needed. Must be called before free_middle_references().
+     */
+    virtual void prepare_temporal() {}
+
     virtual void after_nodes() {}
     virtual void after_ways() {}
     virtual void after_relations() {}

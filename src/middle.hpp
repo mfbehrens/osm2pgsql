@@ -20,6 +20,7 @@
 #include "thread-pool.hpp"
 
 class idlist_t;
+class pg_conn_t;
 
 struct options_t;
 struct output_requirements;
@@ -99,6 +100,16 @@ struct middle_query_t : std::enable_shared_from_this<middle_query_t>
      */
     virtual bool relation_get(osmid_t id,
                               osmium::memory::Buffer *buffer) const = 0;
+
+    /**
+     * Create temporary PostgreSQL tables with temporal metadata
+     * (id, version, created) for closing valid_at ranges.
+     * Only needed in non-slim temporal mode.
+     */
+    virtual void create_temporal_tables(pg_conn_t & /*conn*/,
+                                        std::string const & /*prefix*/) const
+    {
+    }
 };
 
 /**
