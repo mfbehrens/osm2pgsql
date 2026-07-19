@@ -44,6 +44,7 @@ void osmdata_t::node(osmium::Node const &node)
         // non-deleted versions to the output. The closing SQL uses the
         // middle table's lead() to close ranges, so it doesn't need
         // deleted objects in the output.
+        m_mid->set_next_created(m_next_created);
         m_mid->node(node);
         if (!node.deleted()) {
             m_output->node_add(node);
@@ -110,6 +111,7 @@ void osmdata_t::after_nodes()
 void osmdata_t::way(osmium::Way &way)
 {
     if (m_temporal) {
+        m_mid->set_next_created(m_next_created);
         m_mid->way(way);
         if (!way.deleted()) {
             m_output->way_add(&way);
@@ -180,6 +182,7 @@ void osmdata_t::after_ways()
 void osmdata_t::relation(osmium::Relation const &rel)
 {
     if (m_temporal) {
+        m_mid->set_next_created(m_next_created);
         m_mid->relation(rel);
         if (!rel.deleted()) {
             m_output->relation_add(rel);

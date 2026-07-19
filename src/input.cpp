@@ -251,15 +251,57 @@ file_info process_single_file(osmium::io::File const &file, osmdata_t *osmdata,
     type_id last{osmium::item_type::node, 0};
 
     input_context_t ctx{osmdata, progress, append, temporal};
-    while (osmium::memory::Buffer buffer = reader.read()) {
-        for (auto &object : buffer.select<osmium::OSMObject>()) {
-            last = check_input(last, object, temporal);
-            ctx.apply(&object);
-            if (object.timestamp() > finfo.last_timestamp) {
-                finfo.last_timestamp = object.timestamp();
+
+    if (!temporal) {
+        while (osmium::memory::Buffer buffer = reader.read()) {
+            for (auto &object : buffer.select<osmium::OSMObject>()) {
+                last = check_input(last, object, temporal);
+                ctx.apply(&object);
+                if (object.timestamp() > finfo.last_timestamp) {
+                    finfo.last_timestamp = object.timestamp();
+                }
             }
         }
+    } else {
+        // Temporal mode: peek one ahead to determine next_created
+        // for each version, so valid_at ranges are closed at INSERT time.
+        osmium::memory::Buffer prev_buf{4096,
+                                        osmium::memory::Buffer::auto_grow::yes};
+        osmium::OSMObject *prev = nullptr;
+
+        while (osmium::memory::Buffer buffer = reader.read()) {
+            for (auto &object : buffer.select<osmium::OSMObject>()) {
+                last = check_input(last, object, temporal);
+
+                if (prev) {
+                    // Determine next_created for the previous object
+                    if (prev->type() == object.type() &&
+                        prev->id() == object.id()) {
+                        osmdata->set_next_created(object.timestamp());
+                    } else {
+                        osmdata->set_next_created({});
+                    }
+                    ctx.apply(prev);
+                }
+
+                // Copy current object to prev_buf for lookahead
+                prev_buf.clear();
+                prev_buf.add_item(object);
+                prev_buf.commit();
+                prev = &*prev_buf.begin<osmium::OSMObject>();
+
+                if (object.timestamp() > finfo.last_timestamp) {
+                    finfo.last_timestamp = object.timestamp();
+                }
+            }
+        }
+        // Process the last object
+        if (prev) {
+            osmdata->set_next_created({});
+            ctx.apply(prev);
+        }
     }
+
     ctx.eof();
 
     reader.close();

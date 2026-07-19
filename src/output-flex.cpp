@@ -631,8 +631,14 @@ int output_flex_t::app_valid_at()
     }
 
     if (obj->timestamp().valid()) {
-        std::string const ts = obj->timestamp().to_iso();
-        std::string const valid_at = "[" + ts + ",)";
+        auto const next_ts = middle().get_next_timestamp(
+            obj->type(), obj->id(), obj->version());
+
+        std::string valid_at = "[" + obj->timestamp().to_iso() + ",";
+        if (next_ts.valid() && next_ts > obj->timestamp()) {
+            valid_at += next_ts.to_iso();
+        }
+        valid_at += ")";
         lua_pushlstring(lua_state(), valid_at.c_str(), valid_at.size());
     } else {
         lua_pushnil(lua_state());
@@ -1121,88 +1127,12 @@ void output_flex_t::after_relations()
 
 void output_flex_t::prepare_temporal()
 {
-    if (!get_options() || !get_options()->temporal || get_options()->slim) {
-        return;
-    }
-
-    // In non-slim temporal mode, create temporary tables with temporal
-    // metadata from the RAM middle, so the closure SQL in stop() can work.
-    middle().create_temporal_tables(m_db_connection, get_options()->prefix);
+    // No-op: valid_at ranges are now closed at INSERT time using
+    // the peek-ahead approach, so no temporary tables or closing SQL needed.
 }
 
 void output_flex_t::stop()
 {
-    // In temporal mode, close open-ended valid_at ranges in output tables.
-    // This must happen before clustering/indexing.
-    //
-    // We use the middle table's `created` timestamps to find the next version's
-    // time, which handles deleted objects even if they aren't in the output
-    // table (e.g. deleted ways with no geometry).
-    if (get_options() && get_options()->temporal) {
-        for (auto const &table : *m_tables) {
-            bool has_valid_at = false;
-            for (auto const &col : table.columns()) {
-                if (col.name() == "valid_at" &&
-                    (col.sql_type_name() == "tsrange" ||
-                     col.sql_type_name() == "tstzrange")) {
-                    has_valid_at = true;
-                    break;
-                }
-            }
-            if (!has_valid_at) {
-                continue;
-            }
-            auto const id_cols = table.id_column_names();
-            auto const qname = qualified_name(table.schema(), table.name());
-            auto const id_type = table.id_type();
-
-            std::string middle_subquery;
-            if (id_type == flex_table_index_type::node) {
-                middle_subquery =
-                    "SELECT id, version, created FROM planet_osm_nodes";
-            } else if (id_type == flex_table_index_type::way) {
-                middle_subquery =
-                    "SELECT id, version, created FROM planet_osm_ways";
-            } else if (id_type == flex_table_index_type::relation) {
-                middle_subquery =
-                    "SELECT id, version, created FROM planet_osm_rels";
-            } else if (id_type == flex_table_index_type::area) {
-                middle_subquery =
-                    "SELECT id, version, created FROM planet_osm_ways"
-                    " UNION ALL"
-                    " SELECT -id AS id, version, created"
-                    " FROM planet_osm_rels";
-            } else {
-                // Skip tables without a known id type
-                continue;
-            }
-
-            auto const close_sql = fmt::format(
-                "WITH middle_next AS ("
-                "  SELECT m.id, m.version, m.created,"
-                "    lead(m.created) OVER"
-                "      (PARTITION BY m.id ORDER BY m.version)"
-                "      AS next_created"
-                "  FROM ({middle}) m"
-                ")"
-                "UPDATE {qname} t"
-                " SET valid_at = tstzrange("
-                "   lower(t.valid_at),"
-                "   mn.next_created)"
-                " FROM middle_next mn"
-                " WHERE t.{id} = mn.id"
-                "   AND lower(t.valid_at) = mn.created"
-                "   AND mn.next_created IS NOT NULL"
-                "   AND mn.next_created > lower(t.valid_at);",
-                fmt::arg("middle", middle_subquery),
-                fmt::arg("id", id_cols),
-                fmt::arg("qname", qname));
-            log_info("Closing valid_at ranges on table '{}'...",
-                     table.name());
-            m_db_connection.exec(close_sql);
-        }
-    }
-
     for (auto &table : m_table_connections) {
         table.task_set(thread_pool().submit([&]() {
             pg_conn_t const db_connection{get_options()->connection_params,

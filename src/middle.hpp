@@ -12,6 +12,7 @@
 
 #include <osmium/memory/buffer.hpp>
 #include <osmium/osm/entity_bits.hpp>
+#include <osmium/osm/timestamp.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -102,13 +103,15 @@ struct middle_query_t : std::enable_shared_from_this<middle_query_t>
                               osmium::memory::Buffer *buffer) const = 0;
 
     /**
-     * Create temporary PostgreSQL tables with temporal metadata
-     * (id, version, created) for closing valid_at ranges.
-     * Only needed in non-slim temporal mode.
+     * Look up the next_created timestamp for a given (type, id, version).
+     * Used by app_valid_at() to close ranges at INSERT time.
+     * Returns an invalid timestamp if there is no next version.
      */
-    virtual void create_temporal_tables(pg_conn_t & /*conn*/,
-                                        std::string const & /*prefix*/) const
+    virtual osmium::Timestamp
+    get_next_timestamp(osmium::item_type /*type*/, osmid_t /*id*/,
+                       uint32_t /*version*/) const
     {
+        return {};
     }
 };
 
@@ -185,6 +188,13 @@ public:
     virtual std::shared_ptr<middle_query_t> get_query_instance() = 0;
 
     virtual void set_requirements(output_requirements const &) {}
+
+    /**
+     * Set the next_created timestamp for the next object to be stored.
+     * Used in temporal mode so that metadata is populated with the
+     * closing timestamp at INSERT time.
+     */
+    virtual void set_next_created(osmium::Timestamp /*ts*/) {}
 
 protected:
     thread_pool_t &thread_pool() const noexcept

@@ -86,8 +86,10 @@ public:
 
     void set_requirements(output_requirements const &requirements) override;
 
-    void create_temporal_tables(pg_conn_t &conn,
-                                std::string const &prefix) const override;
+    void set_next_created(osmium::Timestamp ts) override;
+
+    osmium::Timestamp get_next_timestamp(osmium::item_type type, osmid_t id,
+                                          uint32_t version) const override;
 
 private:
     struct middle_ram_options
@@ -124,6 +126,7 @@ private:
         osmid_t id;
         uint32_t version;
         osmium::Timestamp created;
+        osmium::Timestamp next_created;
     };
 
     /// Finalize the pending latest non-deleted node: commit to main buffer
@@ -182,6 +185,9 @@ private:
     std::vector<temporal_metadata_t> m_temporal_node_metadata;
     std::vector<temporal_metadata_t> m_temporal_way_metadata;
     std::vector<temporal_metadata_t> m_temporal_rel_metadata;
+
+    /// Next created timestamp to be used for the next metadata entry.
+    osmium::Timestamp m_next_created{};
 
 }; // class middle_ram_t
 

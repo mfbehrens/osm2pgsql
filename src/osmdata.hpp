@@ -22,6 +22,7 @@
 #include <osmium/fwd.hpp>
 #include <osmium/handler.hpp>
 #include <osmium/osm/box.hpp>
+#include <osmium/osm/timestamp.hpp>
 
 #include "idlist.hpp"
 #include "osmtypes.hpp"
@@ -57,6 +58,12 @@ public:
      * This is called once after the input files are processed.
      */
     void stop();
+
+    /**
+     * Set the next_created timestamp for the next object to be stored.
+     * Used in temporal mode for the peek-ahead approach.
+     */
+    void set_next_created(osmium::Timestamp ts) { m_next_created = ts; }
 
     // These getters are needed only for tests
     idlist_t const &get_pending_way_ids() const noexcept
@@ -118,6 +125,9 @@ private:
     bool m_append;
     bool m_droptemp;
     bool m_temporal;
+
+    /// Next created timestamp for temporal peek-ahead.
+    osmium::Timestamp m_next_created{};
 };
 
 #endif // OSM2PGSQL_OSMDATA_HPP

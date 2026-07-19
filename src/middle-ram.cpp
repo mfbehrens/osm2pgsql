@@ -25,6 +25,7 @@
 #include <protozero/buffer_string.hpp>
 #include <protozero/varint.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 
@@ -278,7 +279,7 @@ void middle_ram_t::node(osmium::Node const &node)
         // range closing), but only store the latest non-deleted version in
         // the middle for geometry building.
         m_temporal_node_metadata.push_back(
-            {node.id(), node.version(), node.timestamp()});
+            {node.id(), node.version(), node.timestamp(), m_next_created});
 
         // If we've moved to a new ID, finalize the previous ID's entry.
         if (m_pending_node_valid && m_pending_node_id != node.id()) {
@@ -325,7 +326,7 @@ void middle_ram_t::way(osmium::Way const &way)
 
     if (m_store_options.temporal) {
         m_temporal_way_metadata.push_back(
-            {way.id(), way.version(), way.timestamp()});
+            {way.id(), way.version(), way.timestamp(), m_next_created});
 
         if (m_pending_way_valid && m_pending_way_id != way.id()) {
             finalize_pending_way();
@@ -363,7 +364,8 @@ void middle_ram_t::relation(osmium::Relation const &relation)
 
     if (m_store_options.temporal) {
         m_temporal_rel_metadata.push_back(
-            {relation.id(), relation.version(), relation.timestamp()});
+            {relation.id(), relation.version(), relation.timestamp(),
+             m_next_created});
 
         if (m_pending_rel_valid && m_pending_rel_id != relation.id()) {
             finalize_pending_rel();
@@ -581,46 +583,43 @@ bool middle_ram_t::relation_get(osmid_t id,
     return false;
 }
 
-void middle_ram_t::create_temporal_tables(pg_conn_t &conn,
-                                          std::string const &prefix) const
+void middle_ram_t::set_next_created(osmium::Timestamp ts)
 {
-    auto const create_and_fill = [&](std::string const &suffix,
-                                     std::vector<temporal_metadata_t> const
-                                         &metadata) {
-        auto const table_name = prefix + "_" + suffix;
+    m_next_created = ts;
+}
 
-        conn.exec("DROP TABLE IF EXISTS \"{}\"", table_name);
-        conn.exec("CREATE TEMPORARY TABLE \"{}\" ("
-                  "id int8 NOT NULL,"
-                  "version int4 NOT NULL,"
-                  "created timestamp with time zone"
-                  ")",
-                  table_name);
+osmium::Timestamp
+middle_ram_t::get_next_timestamp(osmium::item_type type, osmid_t id,
+                                 uint32_t version) const
+{
+    auto const &meta = (type == osmium::item_type::node)
+                           ? m_temporal_node_metadata
+                           : (type == osmium::item_type::way)
+                                 ? m_temporal_way_metadata
+                                 : m_temporal_rel_metadata;
 
-        if (metadata.empty()) {
-            return;
-        }
+    // Fast path: check last entry (common case during streaming)
+    if (!meta.empty() && meta.back().id == id &&
+        meta.back().version == version) {
+        return meta.back().next_created;
+    }
 
-        std::string data;
-        data.reserve(metadata.size() * 64);
-        for (auto const &entry : metadata) {
-            fmt::format_to(std::back_inserter(data), FMT_STRING("{}\t{}\t{}\n"),
-                           entry.id, entry.version,
-                           entry.created.to_iso());
-        }
+    // Fallback: binary search
+    auto it = std::lower_bound(
+        meta.begin(), meta.end(), id,
+        [](temporal_metadata_t const &entry, osmid_t target_id) {
+            return entry.id < target_id;
+        });
 
-        auto const copy_sql =
-            fmt::format("COPY \"{}\" FROM STDIN", table_name);
-        conn.copy_start(copy_sql);
-        conn.copy_send(data, table_name);
-        conn.copy_end(table_name);
-    };
+    while (it != meta.end() && it->id == id && it->version < version) {
+        ++it;
+    }
 
-    log_info("Creating temporary temporal metadata tables...");
+    if (it != meta.end() && it->id == id && it->version == version) {
+        return it->next_created;
+    }
 
-    create_and_fill("nodes", m_temporal_node_metadata);
-    create_and_fill("ways", m_temporal_way_metadata);
-    create_and_fill("rels", m_temporal_rel_metadata);
+    return {};
 }
 
 std::shared_ptr<middle_query_t> middle_ram_t::get_query_instance()
