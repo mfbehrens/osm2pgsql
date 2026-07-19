@@ -133,12 +133,6 @@ void middle_ram_t::stop()
         log_debug("Middle 'ram': Node locations on disk: size={} bytes={}M",
                   m_persistent_cache->size(),
                   m_persistent_cache->used_memory() / MBYTE);
-    } else if (m_store_options.temporal) {
-        log_debug("Middle 'ram': Temporal node locations: size={} bytes={}M",
-                  m_temporal_node_locations.size(),
-                  (m_temporal_node_locations.size() *
-                   sizeof(std::pair<osmid_t, osmium::Location>)) /
-                      MBYTE);
     } else {
         log_debug("Middle 'ram': Node locations in memory: size={} bytes={}M",
                   m_node_locations.size(),
@@ -193,15 +187,7 @@ void middle_ram_t::stop()
         index.clear();
     }
 
-    // Clear temporal data structures
-    m_temporal_node_locations.clear();
-    m_temporal_node_locations.rehash(0);
-    m_temporal_node_index.clear();
-    m_temporal_node_index.rehash(0);
-    m_temporal_way_index.clear();
-    m_temporal_way_index.rehash(0);
-    m_temporal_rel_index.clear();
-    m_temporal_rel_index.rehash(0);
+    // Clear temporal metadata
     m_temporal_node_metadata.clear();
     m_temporal_node_metadata.shrink_to_fit();
     m_temporal_way_metadata.clear();
@@ -223,10 +209,6 @@ bool middle_ram_t::get_object(osmium::item_type type, osmid_t id,
 {
     assert(buffer);
 
-    if (m_store_options.temporal) {
-        return get_object_temporal(type, id, buffer);
-    }
-
     auto const offset = m_object_index(type).get(id);
     if (offset == ordered_index_t::not_found_value()) {
         return false;
@@ -236,67 +218,55 @@ bool middle_ram_t::get_object(osmium::item_type type, osmid_t id,
     return true;
 }
 
-void middle_ram_t::store_object_temporal(
-    osmium::OSMObject const &object)
+void middle_ram_t::finalize_pending_node()
 {
-    auto const offset = m_object_buffer.committed();
-    m_object_buffer.add_item(object);
-    m_object_buffer.commit();
-
-    // Update index to point to the latest version.
-    switch (object.type()) {
-    case osmium::item_type::node:
-        m_temporal_node_index[object.id()] = offset;
-        break;
-    case osmium::item_type::way:
-        m_temporal_way_index[object.id()] = offset;
-        break;
-    case osmium::item_type::relation:
-        m_temporal_rel_index[object.id()] = offset;
-        break;
-    default:
-        break;
+    if (!m_pending_node_valid) {
+        return;
     }
+
+    auto const offset = m_object_buffer.committed();
+    m_object_buffer.add_item(m_pending_buf.get<osmium::memory::Item>(0));
+    m_object_buffer.commit();
+    m_object_index.nodes().add(m_pending_node_id, offset);
+
+    if (m_pending_node_location.valid()) {
+        if (m_persistent_cache) {
+            m_persistent_cache->set(m_pending_node_id, m_pending_node_location);
+        } else {
+            m_node_locations.set(m_pending_node_id, m_pending_node_location);
+        }
+    }
+
+    m_pending_node_valid = false;
+    m_pending_node_location = osmium::Location{};
 }
 
-bool middle_ram_t::get_object_temporal(osmium::item_type type, osmid_t id,
-                                       osmium::memory::Buffer *buffer) const
+void middle_ram_t::finalize_pending_way()
 {
-    assert(buffer);
-
-    std::size_t offset = 0;
-    switch (type) {
-    case osmium::item_type::node: {
-        auto const it = m_temporal_node_index.find(id);
-        if (it == m_temporal_node_index.end()) {
-            return false;
-        }
-        offset = it->second;
-        break;
-    }
-    case osmium::item_type::way: {
-        auto const it = m_temporal_way_index.find(id);
-        if (it == m_temporal_way_index.end()) {
-            return false;
-        }
-        offset = it->second;
-        break;
-    }
-    case osmium::item_type::relation: {
-        auto const it = m_temporal_rel_index.find(id);
-        if (it == m_temporal_rel_index.end()) {
-            return false;
-        }
-        offset = it->second;
-        break;
-    }
-    default:
-        return false;
+    if (!m_pending_way_valid) {
+        return;
     }
 
-    buffer->add_item(m_object_buffer.get<osmium::memory::Item>(offset));
-    buffer->commit();
-    return true;
+    auto const offset = m_object_buffer.committed();
+    m_object_buffer.add_item(m_pending_buf.get<osmium::memory::Item>(0));
+    m_object_buffer.commit();
+    m_object_index.ways().add(m_pending_way_id, offset);
+
+    m_pending_way_valid = false;
+}
+
+void middle_ram_t::finalize_pending_rel()
+{
+    if (!m_pending_rel_valid) {
+        return;
+    }
+
+    auto const offset = m_object_buffer.committed();
+    m_object_buffer.add_item(m_pending_buf.get<osmium::memory::Item>(0));
+    m_object_buffer.commit();
+    m_object_index.relations().add(m_pending_rel_id, offset);
+
+    m_pending_rel_valid = false;
 }
 
 void middle_ram_t::node(osmium::Node const &node)
@@ -304,24 +274,31 @@ void middle_ram_t::node(osmium::Node const &node)
     assert(m_middle_state == middle_state::node);
 
     if (m_store_options.temporal) {
-        // In temporal mode, store all versions including deleted ones.
-        // Record temporal metadata.
+        // In temporal mode, record metadata for all versions (for valid_at
+        // range closing), but only store the latest non-deleted version in
+        // the middle for geometry building.
         m_temporal_node_metadata.push_back(
             {node.id(), node.version(), node.timestamp()});
 
-        // Store node location (latest version wins).
-        if (node.location().valid()) {
-            m_temporal_node_locations[node.id()] = node.location();
+        // If we've moved to a new ID, finalize the previous ID's entry.
+        if (m_pending_node_valid && m_pending_node_id != node.id()) {
+            finalize_pending_node();
+            m_pending_buf = osmium::memory::Buffer{
+                4096UL, osmium::memory::Buffer::auto_grow::yes};
         }
 
-        // Also store in persistent cache if available.
-        if (m_persistent_cache && node.location().valid()) {
-            m_persistent_cache->set(node.id(), node.location());
-        }
+        // Keep the latest non-deleted version.
+        if (!node.deleted()) {
+            m_pending_buf = osmium::memory::Buffer{
+                4096UL, osmium::memory::Buffer::auto_grow::yes};
+            m_pending_buf.add_item(node);
+            m_pending_buf.commit();
+            m_pending_node_id = node.id();
+            m_pending_node_valid = true;
 
-        // Store the object for relation member retrieval.
-        if (m_store_options.nodes) {
-            store_object_temporal(node);
+            if (node.location().valid()) {
+                m_pending_node_location = node.location();
+            }
         }
         return;
     }
@@ -347,13 +324,22 @@ void middle_ram_t::way(osmium::Way const &way)
     assert(m_middle_state == middle_state::way);
 
     if (m_store_options.temporal) {
-        // In temporal mode, store all versions including deleted ones.
         m_temporal_way_metadata.push_back(
             {way.id(), way.version(), way.timestamp()});
 
-        // Store the object for relation member retrieval.
-        if (m_store_options.ways) {
-            store_object_temporal(way);
+        if (m_pending_way_valid && m_pending_way_id != way.id()) {
+            finalize_pending_way();
+            m_pending_buf = osmium::memory::Buffer{
+                4096UL, osmium::memory::Buffer::auto_grow::yes};
+        }
+
+        if (!way.deleted()) {
+            m_pending_buf = osmium::memory::Buffer{
+                4096UL, osmium::memory::Buffer::auto_grow::yes};
+            m_pending_buf.add_item(way);
+            m_pending_buf.commit();
+            m_pending_way_id = way.id();
+            m_pending_way_valid = true;
         }
         return;
     }
@@ -376,13 +362,22 @@ void middle_ram_t::relation(osmium::Relation const &relation)
     assert(m_middle_state == middle_state::relation);
 
     if (m_store_options.temporal) {
-        // In temporal mode, store all versions including deleted ones.
         m_temporal_rel_metadata.push_back(
             {relation.id(), relation.version(), relation.timestamp()});
 
-        // Store the object for relation member retrieval.
-        if (m_store_options.relations) {
-            store_object_temporal(relation);
+        if (m_pending_rel_valid && m_pending_rel_id != relation.id()) {
+            finalize_pending_rel();
+            m_pending_buf = osmium::memory::Buffer{
+                4096UL, osmium::memory::Buffer::auto_grow::yes};
+        }
+
+        if (!relation.deleted()) {
+            m_pending_buf = osmium::memory::Buffer{
+                4096UL, osmium::memory::Buffer::auto_grow::yes};
+            m_pending_buf.add_item(relation);
+            m_pending_buf.commit();
+            m_pending_rel_id = relation.id();
+            m_pending_rel_valid = true;
         }
         return;
     }
@@ -401,8 +396,30 @@ void middle_ram_t::after_nodes()
     m_middle_state = middle_state::way;
 #endif
 
+    if (m_store_options.temporal) {
+        finalize_pending_node();
+    }
+
     if (!m_persistent_cache) {
         m_node_locations.log_stats();
+    }
+}
+
+void middle_ram_t::after_ways()
+{
+    middle_t::after_ways();
+
+    if (m_store_options.temporal) {
+        finalize_pending_way();
+    }
+}
+
+void middle_ram_t::after_relations()
+{
+    middle_t::after_relations();
+
+    if (m_store_options.temporal) {
+        finalize_pending_rel();
     }
 }
 
@@ -416,17 +433,6 @@ std::size_t middle_ram_t::nodes_get_list(osmium::WayNodeList *nodes) const
     assert(nodes);
 
     std::size_t count = 0;
-
-    if (m_store_options.temporal) {
-        for (auto &nr : *nodes) {
-            auto const it = m_temporal_node_locations.find(nr.ref());
-            if (it != m_temporal_node_locations.end()) {
-                nr.set_location(it->second);
-                ++count;
-            }
-        }
-        return count;
-    }
 
     if (m_store_options.locations) {
         if (m_persistent_cache) {
@@ -506,42 +512,6 @@ middle_ram_t::rel_members_get(osmium::Relation const &rel,
         auto const member_entity_type =
             osmium::osm_entity_bits::from_item_type(member.type());
         if ((member_entity_type & types) == 0) {
-            continue;
-        }
-
-        if (m_store_options.temporal) {
-            switch (member.type()) {
-            case osmium::item_type::node:
-                if (m_store_options.nodes) {
-                    if (get_object_temporal(osmium::item_type::node,
-                                            member.ref(), buffer)) {
-                        ++count;
-                        continue;
-                    }
-                }
-                {
-                    osmium::builder::NodeBuilder builder{*buffer};
-                    builder.set_id(member.ref());
-                }
-                buffer->commit();
-                ++count;
-                break;
-            case osmium::item_type::way:
-                if (m_store_options.ways) {
-                    if (get_object_temporal(osmium::item_type::way,
-                                            member.ref(), buffer)) {
-                        ++count;
-                    }
-                }
-                break;
-            default: // osmium::item_type::relation
-                if (m_store_options.relations) {
-                    if (get_object_temporal(osmium::item_type::relation,
-                                            member.ref(), buffer)) {
-                        ++count;
-                    }
-                }
-            }
             continue;
         }
 

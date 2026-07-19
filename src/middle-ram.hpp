@@ -23,7 +23,6 @@
 #include <cstddef>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -65,6 +64,8 @@ public:
     void relation(osmium::Relation const &) override;
 
     void after_nodes() override;
+    void after_ways() override;
+    void after_relations() override;
 
     osmium::Location get_node_location(osmid_t id) const override;
 
@@ -115,15 +116,8 @@ private:
 
     void store_object(osmium::OSMObject const &object);
 
-    /// Store an object in temporal mode (allows multiple versions per id).
-    void store_object_temporal(osmium::OSMObject const &object);
-
     bool get_object(osmium::item_type type, osmid_t id,
                     osmium::memory::Buffer *buffer) const;
-
-    /// Get the latest version of an object in temporal mode.
-    bool get_object_temporal(osmium::item_type type, osmid_t id,
-                             osmium::memory::Buffer *buffer) const;
 
     struct temporal_metadata_t
     {
@@ -131,6 +125,16 @@ private:
         uint32_t version;
         osmium::Timestamp created;
     };
+
+    /// Finalize the pending latest non-deleted node: commit to main buffer
+    /// and index. Called when a new ID is encountered or at after_nodes().
+    void finalize_pending_node();
+
+    /// Finalize the pending latest non-deleted way.
+    void finalize_pending_way();
+
+    /// Finalize the pending latest non-deleted relation.
+    void finalize_pending_rel();
 
     /// For storing the location of all nodes.
     node_locations_t m_node_locations;
@@ -156,15 +160,25 @@ private:
 
     // Temporal mode data structures
 
-    /// Node locations for temporal mode (latest version per id).
-    std::unordered_map<osmid_t, osmium::Location> m_temporal_node_locations;
+    /// Pending latest non-deleted version buffer (shared across types,
+    /// reused because node/way/relation processing is sequential).
+    osmium::memory::Buffer m_pending_buf{
+        4096UL, osmium::memory::Buffer::auto_grow::yes};
 
-    /// Object index for temporal mode: maps id to buffer offset (latest version).
-    std::unordered_map<osmid_t, std::size_t> m_temporal_node_index;
-    std::unordered_map<osmid_t, std::size_t> m_temporal_way_index;
-    std::unordered_map<osmid_t, std::size_t> m_temporal_rel_index;
+    /// Track the pending latest non-deleted node.
+    osmid_t m_pending_node_id = -1;
+    bool m_pending_node_valid = false;
+    osmium::Location m_pending_node_location{};
 
-    /// Temporal metadata for closing valid_at ranges.
+    /// Track the pending latest non-deleted way.
+    osmid_t m_pending_way_id = -1;
+    bool m_pending_way_valid = false;
+
+    /// Track the pending latest non-deleted relation.
+    osmid_t m_pending_rel_id = -1;
+    bool m_pending_rel_valid = false;
+
+    /// Temporal metadata for closing valid_at ranges (all versions).
     std::vector<temporal_metadata_t> m_temporal_node_metadata;
     std::vector<temporal_metadata_t> m_temporal_way_metadata;
     std::vector<temporal_metadata_t> m_temporal_rel_metadata;
