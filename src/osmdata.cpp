@@ -72,6 +72,72 @@ void osmdata_t::node(osmium::Node const &node)
     }
 }
 
+void osmdata_t::temporal_node(osmium::Node const &node,
+                              valid_range_t const &range, bool last_version)
+{
+    if (node.visible()) {
+        if (!node.location().valid()) {
+            log_warn("Ignored node {} (version {}) with invalid location.",
+                     node.id(), node.version());
+            return;
+        }
+        if (m_bbox.valid() && !m_bbox.contains(node.location())) {
+            return;
+        }
+    }
+
+    if (last_version) {
+        m_mid->node(node);
+    }
+
+    if (node.deleted()) {
+        return;
+    }
+
+    current_valid_range = &range;
+    m_output->node_add(node);
+    current_valid_range = nullptr;
+}
+
+void osmdata_t::temporal_way(osmium::Way &way, valid_range_t const &range,
+                             bool last_version)
+{
+    if (last_version) {
+        m_mid->way(way);
+    }
+
+    if (way.deleted()) {
+        return;
+    }
+
+    current_valid_range = &range;
+    m_output->way_add(&way);
+    current_valid_range = nullptr;
+}
+
+void osmdata_t::temporal_relation(osmium::Relation const &rel,
+                                  valid_range_t const &range, bool last_version)
+{
+    if (rel.members().size() > 32767) {
+        log_warn(
+            "Relation id {} ignored, because it has more than 32767 members",
+            rel.id());
+        return;
+    }
+
+    if (last_version) {
+        m_mid->relation(rel);
+    }
+
+    if (rel.deleted()) {
+        return;
+    }
+
+    current_valid_range = &range;
+    m_output->relation_add(rel);
+    current_valid_range = nullptr;
+}
+
 void osmdata_t::after_nodes()
 {
     m_mid->after_nodes();

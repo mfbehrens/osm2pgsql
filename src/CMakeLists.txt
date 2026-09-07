@@ -33,6 +33,7 @@ target_sources(osm2pgsql_lib PRIVATE
     geom-pole-of-inaccessibility.cpp
     geom.cpp
     hex.cpp
+    history_parser.cpp
     idlist.cpp
     input.cpp
     locator.cpp

@@ -159,6 +159,8 @@ public:
     int app_as_multipolygon();
     int app_as_geometrycollection();
 
+    int app_valid_at();
+
     int app_define_locator();
     int app_define_table();
     int app_define_expire_output();

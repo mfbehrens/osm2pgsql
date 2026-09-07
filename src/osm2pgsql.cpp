@@ -8,6 +8,7 @@
  */
 
 #include "command-line-parser.hpp"
+#include "history_parser.hpp"
 #include "input.hpp"
 #include "logging.hpp"
 #include "middle.hpp"
@@ -47,7 +48,10 @@ void show_memory_usage()
 file_info run(options_t const &options, properties_t *properties)
 {
     auto const files = prepare_input_files(
-        options.input_files, options.input_format, options.append);
+        options.input_files, options.input_format,
+        // History files (.osh.pbf) contain multiple object versions; that
+        // is expected and fine in temporal mode.
+        options.append || options.temporal);
 
     auto thread_pool = std::make_shared<thread_pool_t>(
         options.parallel_indexing ? options.num_procs : 1U);
@@ -68,10 +72,23 @@ file_info run(options_t const &options, properties_t *properties)
 
     osmdata_t osmdata{middle, output, options};
 
-    // Processing: In this phase the input file(s) are read and parsed,
-    // populating some of the tables.
-    auto finfo = process_files(files, &osmdata, options.append,
-                               get_logger().show_progress());
+    file_info finfo;
+    if (options.temporal) {
+        if (files.size() > 1) {
+            throw std::runtime_error{
+                "--temporal currently only supports a single input file."};
+        }
+        // Temporal history import: read the history file, compute the
+        // validity range for every object version and replay all versions
+        // through the osmdata temporal processing.
+        history_parser_t parser{&osmdata};
+        parser.parse(files.front());
+    } else {
+        // Processing: In this phase the input file(s) are read and parsed,
+        // populating some of the tables.
+        finfo = process_files(files, &osmdata, options.append,
+                              get_logger().show_progress());
+    }
 
     show_memory_usage();
 

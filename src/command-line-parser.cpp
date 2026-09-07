@@ -133,7 +133,7 @@ void check_options_non_slim(CLI::App const &app)
 {
     std::vector<std::string> const slim_options = {
         "--cache", "--middle-schema", "--middle-with-nodes",
-        "--tablespace-slim-data", "--tablespace-slim-index"};
+        "--tablespace-slim-data", "--tablespace-slim-index", "--temporal"};
 
     for (auto const &opt : slim_options) {
         if (app.count(opt) > 0) {
@@ -205,6 +205,11 @@ void check_options(options_t *options)
 {
     if (options->append && !options->slim) {
         throw std::runtime_error{"--append can only be used with slim mode!"};
+    }
+
+    if (options->temporal && options->append) {
+        throw std::runtime_error{
+            "--temporal can not be used together with --append (yet)."};
     }
 
     if (options->cache < 0) {
@@ -292,6 +297,12 @@ options_t parse_command_line(int argc, char *argv[])
     app.add_flag("-s,--slim", options.slim)
         ->description("Store raw OSM data in the database."
                       " Required if you want to update with --append later.");
+
+    // --temporal
+    app.add_flag("--temporal", options.temporal)
+        ->description(
+            "Import OSM history file (.osh.pbf): compute temporal validity"
+            " ranges for all object versions. Needs --slim.");
 
     // ----------------------------------------------------------------------
     // Database options

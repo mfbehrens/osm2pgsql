@@ -21,6 +21,7 @@
 #include "flex-write.hpp"
 #include "format.hpp"
 #include "geom-from-osm.hpp"
+#include "history_element.hpp"
 #include "logging.hpp"
 #include "lua-init.hpp"
 #include "lua-setup.hpp"
@@ -85,6 +86,7 @@ TRAMPOLINE(app_as_multipoint, as_multipoint)
 TRAMPOLINE(app_as_multilinestring, as_multilinestring)
 TRAMPOLINE(app_as_multipolygon, as_multipolygon)
 TRAMPOLINE(app_as_geometrycollection, as_geometrycollection)
+TRAMPOLINE(app_valid_at, valid_at)
 
 } // anonymous namespace
 
@@ -397,6 +399,25 @@ void output_flex_t::check_context_and_state(char const *name,
     if (lua_gettop(lua_state()) > 1) {
         throw fmt_error("No parameter(s) needed for {}().", name);
     }
+}
+
+int output_flex_t::app_valid_at()
+{
+    check_for_object(lua_state(), "valid_at");
+
+    if (lua_gettop(lua_state()) > 1) {
+        throw fmt_error("No parameter(s) needed for valid_at().");
+    }
+
+    if (current_valid_range == nullptr) {
+        // Not a temporal history import, or the object is processed outside
+        // the history replay (e.g. stage 2 processing): no range available.
+        lua_pushnil(lua_state());
+        return 1;
+    }
+
+    luaX_pushstring(lua_state(), current_valid_range->to_tsrange());
+    return 1;
 }
 
 int output_flex_t::app_get_bbox()
@@ -1441,6 +1462,7 @@ void output_flex_t::init_lua(std::string const &filename,
     luaX_set_up_metatable(
         lua_state(), "OSMObject", OSM2PGSQL_OSMOBJECT_CLASS,
         {{"get_bbox", lua_trampoline_app_get_bbox},
+         {"valid_at", lua_trampoline_app_valid_at},
          {"as_linestring", lua_trampoline_app_as_linestring},
          {"as_point", lua_trampoline_app_as_point},
          {"as_polygon", lua_trampoline_app_as_polygon},

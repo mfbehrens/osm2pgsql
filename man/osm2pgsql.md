@@ -43,6 +43,11 @@ mandatory for short options too.
 :   Run in create mode. This is the default if **-a, \--append** is not
     specified. Removes existing data from the database tables!
 
+\--temporal
+:   Import an OSM history file (`.osh.pbf`): compute the temporal validity
+    range for every object version from the version timestamps. Can only
+    be used together with **-s, \--slim**.
+
 # HELP/VERSION OPTIONS
 
 -h, \--help
