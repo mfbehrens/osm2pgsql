@@ -61,8 +61,9 @@ file_info run(options_t const &options, properties_t *properties)
     auto middle = create_middle(thread_pool, options);
     middle->start();
 
-    auto output = output_t::create_output(middle->get_query_instance(),
-                                          thread_pool, options, *properties);
+    auto const middle_query = middle->get_query_instance();
+    auto output =
+        output_t::create_output(middle_query, thread_pool, options, *properties);
 
     middle->set_requirements(output->get_requirements());
 
@@ -83,7 +84,7 @@ file_info run(options_t const &options, properties_t *properties)
         // validity range for every object version and replay all versions
         // through the osmdata temporal processing.
         progress_display_t progress{get_logger().show_progress()};
-        history_parser_t parser{&osmdata, &progress};
+        history_parser_t parser{&osmdata, middle_query.get(), &progress};
         parser.parse(files.front());
     } else {
         // Processing: In this phase the input file(s) are read and parsed,

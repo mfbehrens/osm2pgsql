@@ -15,10 +15,24 @@
 #include <osmium/osm/timestamp.hpp>
 
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <vector>
 
 #include "osmtypes.hpp"
 #include "thread-pool.hpp"
+
+/**
+ * One way version as stored in the way history table: when it was
+ * created, whether it is visible and its node list. Used by the temporal
+ * history import to compute geometry change events of relations.
+ */
+struct way_history_version_t
+{
+    osmium::Timestamp ts{};
+    bool visible = true;
+    std::vector<osmid_t> nodes;
+};
 
 class idlist_t;
 
@@ -125,6 +139,33 @@ struct middle_query_t : std::enable_shared_from_this<middle_query_t>
         osmium::Timestamp /*as_of*/) const
     {
         return 0;
+    }
+
+    /**
+     * Get the timestamps of all versions of the given nodes, including
+     * invisible (deleted) versions. Used by the temporal history import
+     * to compute geometry change events: every node version potentially
+     * changes the geometry of the ways referencing it.
+     *
+     * \return Timestamps per node id, sorted arbitrarily.
+     */
+    virtual std::map<osmid_t, std::vector<osmium::Timestamp>>
+    node_version_timestamps(idlist_t const & /*ids*/) const
+    {
+        return {};
+    }
+
+    /**
+     * Get all versions of the given ways with their node lists, including
+     * invisible (deleted) versions. Used by the temporal history import
+     * to compute geometry change events of relations.
+     *
+     * \return Way versions per way id in file order (sorted by timestamp).
+     */
+    virtual std::map<osmid_t, std::vector<way_history_version_t>>
+    way_histories(idlist_t const & /*ids*/) const
+    {
+        return {};
     }
 
     /**

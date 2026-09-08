@@ -12,6 +12,7 @@
 
 #include <memory>
 #include <string_view>
+#include <vector>
 
 #include <osmium/osm/timestamp.hpp>
 
@@ -115,6 +116,12 @@ public:
                                  osmium::memory::Buffer *buffer,
                                  osmium::osm_entity_bits::type types,
                                  osmium::Timestamp as_of) const override;
+
+    std::map<osmid_t, std::vector<osmium::Timestamp>>
+    node_version_timestamps(idlist_t const &ids) const override;
+
+    std::map<osmid_t, std::vector<way_history_version_t>>
+    way_histories(idlist_t const &ids) const override;
 
     bool relation_get(osmid_t id,
                       osmium::memory::Buffer *buffer) const override;

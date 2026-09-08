@@ -14,9 +14,6 @@
  * It contains the history_parser_t class.
  */
 
-#include "history_element.hpp"
-#include "osmtypes.hpp"
-
 #include <osmium/io/file.hpp>
 #include <osmium/memory/buffer.hpp>
 #include <osmium/osm/types.hpp>
@@ -25,6 +22,10 @@
 #include <cstdint>
 #include <vector>
 
+#include "history_element.hpp"
+#include "osmtypes.hpp"
+
+class middle_query_t;
 class osmdata_t;
 class progress_display_t;
 
@@ -37,12 +38,19 @@ class progress_display_t;
  * version and replays all versions through the osmdata_t temporal
  * processing. Because most objects only have one or a few versions, a
  * group easily fits into RAM.
+ *
+ * The geometry of a way (or relation member geometry) changes whenever
+ * the object itself or one of its member nodes (or member ways) gets a
+ * new version. To get exact geometries, way and relation version ranges
+ * are therefore split at those geometry change events and every segment
+ * is replayed separately with the geometry valid at the segment start.
  */
 class history_parser_t
 {
 public:
-    history_parser_t(osmdata_t *osmdata, progress_display_t *progress) noexcept
-    : m_osmdata(osmdata), m_progress(progress)
+    history_parser_t(osmdata_t *osmdata, middle_query_t const *middle,
+                     progress_display_t *progress) noexcept
+    : m_osmdata(osmdata), m_middle(middle), m_progress(progress)
     {
     }
 
@@ -60,7 +68,18 @@ private:
     /// object.
     void flush_group();
 
+    /// Replay a way group, splitting every version range at the geometry
+    /// change events of its member nodes.
+    void replay_way_segments(std::vector<valid_range_t> const &ranges);
+
+    /// Replay a relation group, splitting every version range at the
+    /// geometry change events of its member nodes and member ways.
+    void replay_relation_segments(std::vector<valid_range_t> const &ranges);
+
     osmdata_t *m_osmdata;
+
+    /// Middle query interface (for reading node and way version lists).
+    middle_query_t const *m_middle;
 
     /// Progress display (counts versions of each object type).
     progress_display_t *m_progress;
@@ -86,6 +105,7 @@ private:
     uint64_t m_single = 0;          ///< objects with exactly one version
     uint64_t m_deleted = 0;         ///< invisible (deleted) versions
     uint64_t m_invalid = 0;         ///< versions with non-monotonic timestamps
+    uint64_t m_segments = 0;        ///< geometry segments replayed
     std::size_t m_max_versions = 0; ///< largest version count of one object
 };
 

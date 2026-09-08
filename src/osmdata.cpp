@@ -100,10 +100,13 @@ void osmdata_t::temporal_node(osmium::Node const &node,
     current_valid_range = nullptr;
 }
 
-void osmdata_t::temporal_way(osmium::Way &way, valid_range_t const &range)
+void osmdata_t::temporal_way_history(osmium::Way const &way)
 {
     m_mid->way_history(way);
+}
 
+void osmdata_t::temporal_way(osmium::Way &way, valid_range_t const &range)
+{
     if (way.deleted()) {
         // Tombstone: closes the previous version's range, no own row.
         return;

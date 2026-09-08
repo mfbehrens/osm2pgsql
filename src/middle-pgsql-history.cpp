@@ -72,6 +72,32 @@ void build_history_way(osmid_t id, pg_result_t const &res, int res_num,
     pgsql_parse_nodes(res.get_value(res_num, 2), buffer, &builder);
 }
 
+/**
+ * Parse a PostgreSQL array of object ids in the form "[1,2,3]" into a
+ * vector.
+ */
+std::vector<osmid_t> parse_id_array(char const *str)
+{
+    std::vector<osmid_t> ids;
+
+    if (str == nullptr || *str != '{') {
+        return ids;
+    }
+
+    char const *p = str + 1;
+    while (*p != '\0' && *p != '}') {
+        char *end = nullptr;
+        auto const id = std::strtoll(p, &end, 10);
+        if (end == p) {
+            break;
+        }
+        ids.push_back(static_cast<osmid_t>(id));
+        p = (*end == ',') ? end + 1 : end;
+    }
+
+    return ids;
+}
+
 } // anonymous namespace
 
 middle_pgsql_history_t::middle_pgsql_history_t(
@@ -270,6 +296,20 @@ std::shared_ptr<middle_query_t> middle_pgsql_history_t::get_query_instance()
                      " ORDER BY way_id, ts DESC, version DESC"
                      ") t WHERE visible"));
 
+    mid->prepare("get_node_version_timestamps",
+                 render_template("SELECT node_id,"
+                                 " EXTRACT(EPOCH FROM ts)::int8"
+                                 " FROM {schema}\"{prefix}_nodes_history\""
+                                 " WHERE node_id = ANY($1::int8[])"));
+
+    mid->prepare("get_way_histories",
+                 render_template("SELECT way_id,"
+                                 " EXTRACT(EPOCH FROM ts)::int8,"
+                                 " visible, nodes"
+                                 " FROM {schema}\"{prefix}_ways_history\""
+                                 " WHERE way_id = ANY($1::int8[])"
+                                 " ORDER BY way_id, ts, version"));
+
     return std::shared_ptr<middle_query_t>(mid.release());
 }
 
@@ -287,6 +327,66 @@ middle_query_pgsql_history_t::middle_query_pgsql_history_t(
     // problems when accessing the intarrays.
     m_db_connection.set_config("jit_above_cost", "-1");
     m_db_connection.set_config("max_parallel_workers_per_gather", "0");
+}
+
+std::map<osmid_t, std::vector<osmium::Timestamp>>
+middle_query_pgsql_history_t::node_version_timestamps(
+    idlist_t const &ids) const
+{
+    std::map<osmid_t, std::vector<osmium::Timestamp>> result;
+
+    if (ids.empty()) {
+        return result;
+    }
+
+    util::string_joiner_t id_list{',', '\0', '{', '}'};
+    for (auto const id : ids) {
+        id_list.add(fmt::to_string(id));
+    }
+
+    auto const res =
+        m_db_connection.exec_prepared("get_node_version_timestamps",
+                                      id_list());
+
+    for (int i = 0; i < res.num_tuples(); ++i) {
+        result[osmium::string_to_object_id(res.get_value(i, 0))]
+            .emplace_back(
+                static_cast<uint32_t>(std::strtoll(res.get_value(i, 1),
+                                                   nullptr, 10)));
+    }
+
+    return result;
+}
+
+std::map<osmid_t, std::vector<way_history_version_t>>
+middle_query_pgsql_history_t::way_histories(idlist_t const &ids) const
+{
+    std::map<osmid_t, std::vector<way_history_version_t>> result;
+
+    if (ids.empty()) {
+        return result;
+    }
+
+    util::string_joiner_t id_list{',', '\0', '{', '}'};
+    for (auto const id : ids) {
+        id_list.add(fmt::to_string(id));
+    }
+
+    auto const res =
+        m_db_connection.exec_prepared("get_way_histories", id_list());
+
+    for (int i = 0; i < res.num_tuples(); ++i) {
+        auto &versions =
+            result[osmium::string_to_object_id(res.get_value(i, 0))];
+        way_history_version_t version;
+        version.ts = osmium::Timestamp{static_cast<uint32_t>(
+            std::strtoll(res.get_value(i, 1), nullptr, 10))};
+        version.visible = (*res.get_value(i, 2) == 't');
+        version.nodes = parse_id_array(res.get_value(i, 3));
+        versions.push_back(std::move(version));
+    }
+
+    return result;
 }
 
 osmium::Location

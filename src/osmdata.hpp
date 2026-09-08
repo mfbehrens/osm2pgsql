@@ -63,6 +63,18 @@ public:
      * \param range Validity range of this version.
      */
     void temporal_node(osmium::Node const &node, valid_range_t const &range);
+
+    /**
+     * Store a way version in the way history (called once per version,
+     * including tombstones).
+     */
+    void temporal_way_history(osmium::Way const &way);
+
+    /**
+     * Replay a way (segment) with the given validity range. Geometry
+     * change events split a version's range into several segments, each
+     * replayed separately; only visible versions produce output.
+     */
     void temporal_way(osmium::Way &way, valid_range_t const &range);
     void temporal_relation(osmium::Relation const &rel,
                            valid_range_t const &range);
