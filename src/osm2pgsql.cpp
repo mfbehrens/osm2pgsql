@@ -17,6 +17,7 @@
 #include "output.hpp"
 #include "pgsql.hpp"
 #include "pgsql-capabilities.hpp"
+#include "progress-display.hpp"
 #include "properties.hpp"
 #include "util.hpp"
 #include "version.hpp"
@@ -81,7 +82,8 @@ file_info run(options_t const &options, properties_t *properties)
         // Temporal history import: read the history file, compute the
         // validity range for every object version and replay all versions
         // through the osmdata temporal processing.
-        history_parser_t parser{&osmdata};
+        progress_display_t progress{get_logger().show_progress()};
+        history_parser_t parser{&osmdata, &progress};
         parser.parse(files.front());
     } else {
         // Processing: In this phase the input file(s) are read and parsed,

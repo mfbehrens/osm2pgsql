@@ -239,12 +239,16 @@ typename CONTAINER::value_type &get_from_idx_param(lua_State *lua_state,
     return item;
 }
 
-std::size_t get_nodes(middle_query_t const &middle, osmium::Way *way)
+std::size_t get_nodes(middle_query_t const &middle, osmium::Way *way,
+                      osmium::Timestamp const *as_of = nullptr)
 {
     constexpr std::size_t MAX_MISSING_NODES = 100;
     static std::size_t count_missing_nodes = 0;
 
-    auto const count = middle.nodes_get_list(&way->nodes());
+    auto const count =
+        as_of != nullptr
+            ? middle.nodes_get_list_as_of(&way->nodes(), *as_of)
+            : middle.nodes_get_list(&way->nodes());
 
     if (count_missing_nodes <= MAX_MISSING_NODES &&
         count != way->nodes().size()) {
@@ -704,7 +708,14 @@ void output_flex_t::way_cache_t::init(osmium::Way *way)
 std::size_t output_flex_t::way_cache_t::add_nodes(middle_query_t const &middle)
 {
     if (m_num_way_nodes == std::numeric_limits<std::size_t>::max()) {
-        m_num_way_nodes = get_nodes(middle, m_way);
+        if (current_valid_range != nullptr) {
+            // Temporal import: resolve the node locations as of the
+            // beginning of this version's validity range.
+            m_num_way_nodes =
+                get_nodes(middle, m_way, &current_valid_range->from);
+        } else {
+            m_num_way_nodes = get_nodes(middle, m_way);
+        }
     }
 
     return m_num_way_nodes;
@@ -734,6 +745,22 @@ void output_flex_t::relation_cache_t::init(osmium::Relation const &relation)
 bool output_flex_t::relation_cache_t::add_members(middle_query_t const &middle)
 {
     if (members_buffer().committed() == 0) {
+        if (current_valid_range != nullptr) {
+            // Temporal import: the middle resolves all members as of the
+            // beginning of this version's validity range, including their
+            // node locations.
+            auto const num_members = middle.rel_members_get_as_of(
+                *m_relation, &m_members_buffer,
+                osmium::osm_entity_bits::node | osmium::osm_entity_bits::way,
+                current_valid_range->from);
+
+            if (num_members == 0) {
+                return false;
+            }
+
+            return true;
+        }
+
         auto const num_members = middle.rel_members_get(
             *m_relation, &m_members_buffer,
             osmium::osm_entity_bits::node | osmium::osm_entity_bits::way);

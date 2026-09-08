@@ -12,8 +12,10 @@
 #include "input.hpp"
 #include "logging.hpp"
 #include "osmdata.hpp"
+#include "progress-display.hpp"
 
 #include <osmium/io/reader.hpp>
+#include <osmium/visitor.hpp>
 
 #include <algorithm>
 
@@ -58,9 +60,6 @@ type_id check_history_input(type_id const &last, osmium::OSMObject const &object
 void history_parser_t::parse(osmium::io::File const &file)
 {
     log_info("Reading OSM history file '{}'...", file.filename());
-    log_warn("Temporal import: way and relation geometries are built from"
-             " the current (latest) node locations, geometries of older"
-             " versions are approximations.");
 
     osmium::io::Reader reader{file};
     type_id last{osmium::item_type::node, 0};
@@ -72,13 +71,16 @@ void history_parser_t::parse(osmium::io::File const &file)
             if (m_last_type != object.type()) {
                 if (m_last_type == osmium::item_type::node) {
                     m_osmdata->after_nodes();
+                    m_progress->start_way_counter();
                 }
                 if (object.type() == osmium::item_type::relation) {
                     m_osmdata->after_ways();
+                    m_progress->start_relation_counter();
                 }
                 m_last_type = object.type();
             }
 
+            osmium::apply_item(object, *m_progress);
             process(object);
         }
     }
@@ -100,6 +102,7 @@ void history_parser_t::parse(osmium::io::File const &file)
         break;
     }
     m_osmdata->after_relations();
+    m_progress->print_summary();
 
     log_info(
         "History file '{}': read {} versions of {} objects"

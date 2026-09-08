@@ -12,6 +12,7 @@
 
 #include <osmium/memory/buffer.hpp>
 #include <osmium/osm/entity_bits.hpp>
+#include <osmium/osm/timestamp.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -51,6 +52,24 @@ struct middle_query_t : std::enable_shared_from_this<middle_query_t>
     virtual size_t nodes_get_list(osmium::WayNodeList *nodes) const = 0;
 
     /**
+     * Retrieves node locations valid at the given time and stores them
+     * directly in the input list. Nodes that did not exist (yet), were
+     * deleted, or have no history data available keep an invalid
+     * location.
+     *
+     * Only implemented by middles supporting the temporal history
+     * import.
+     *
+     * \return The number of locations found.
+     */
+    virtual size_t
+    nodes_get_list_as_of(osmium::WayNodeList * /*nodes*/,
+                         osmium::Timestamp /*as_of*/) const
+    {
+        return 0;
+    }
+
+    /**
      * Retrieves a single node from the nodes storage
      * and stores it in the given osmium buffer.
      *
@@ -87,6 +106,26 @@ struct middle_query_t : std::enable_shared_from_this<middle_query_t>
     virtual size_t
     rel_members_get(osmium::Relation const &rel, osmium::memory::Buffer *buffer,
                     osmium::osm_entity_bits::type types) const = 0;
+
+    /**
+     * Retrieves the members of a relation as they were at the given time
+     * and stores them in an Osmium buffer. Member nodes get their location
+     * as of that time, member ways get their node list as of that time
+     * including the node locations. If a member did not exist (yet) or was
+     * deleted at that time it is not added, which is not an error.
+     *
+     * Only implemented by middles supporting the temporal history
+     * import.
+     *
+     * \return The number of members we could get.
+     */
+    virtual size_t rel_members_get_as_of(
+        osmium::Relation const & /*rel*/, osmium::memory::Buffer * /*buffer*/,
+        osmium::osm_entity_bits::type /*types*/,
+        osmium::Timestamp /*as_of*/) const
+    {
+        return 0;
+    }
 
     /**
      * Retrieves a single relation from the relation storage
@@ -129,6 +168,20 @@ public:
 
     /// This is called for every added, changed or deleted way.
     virtual void way(osmium::Way const &way) = 0;
+
+    /**
+     * Temporal history import: Store one version of a node in the node
+     * history storage. Called for every version of every node. The default
+     * implementation does nothing.
+     */
+    virtual void node_history(osmium::Node const & /*node*/) {}
+
+    /**
+     * Temporal history import: Store one version of a way (its node list)
+     * in the way history storage. Called for every version of every way.
+     * The default implementation does nothing.
+     */
+    virtual void way_history(osmium::Way const & /*way*/) {}
 
     /// This is called for every added, changed or deleted relation.
     virtual void relation(osmium::Relation const &relation) = 0;

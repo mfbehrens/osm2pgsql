@@ -26,6 +26,7 @@
 #include <vector>
 
 class osmdata_t;
+class progress_display_t;
 
 /**
  * Parser for OSM history files (.osh.pbf).
@@ -40,8 +41,8 @@ class osmdata_t;
 class history_parser_t
 {
 public:
-    explicit history_parser_t(osmdata_t *osmdata) noexcept
-    : m_osmdata(osmdata)
+    history_parser_t(osmdata_t *osmdata, progress_display_t *progress) noexcept
+    : m_osmdata(osmdata), m_progress(progress)
     {
     }
 
@@ -60,6 +61,9 @@ private:
     void flush_group();
 
     osmdata_t *m_osmdata;
+
+    /// Progress display (counts versions of each object type).
+    progress_display_t *m_progress;
 
     osmium::item_type m_current_type = osmium::item_type::undefined;
     osmid_t m_current_id = 0;

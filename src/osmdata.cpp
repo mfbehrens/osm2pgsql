@@ -75,6 +75,10 @@ void osmdata_t::node(osmium::Node const &node)
 void osmdata_t::temporal_node(osmium::Node const &node,
                               valid_range_t const &range, bool last_version)
 {
+    // Every version goes into the node history, even those filtered out
+    // below: as-of geometry lookups need the complete location history.
+    m_mid->node_history(node);
+
     if (node.visible()) {
         if (!node.location().valid()) {
             log_warn("Ignored node {} (version {}) with invalid location.",
@@ -102,6 +106,8 @@ void osmdata_t::temporal_node(osmium::Node const &node,
 void osmdata_t::temporal_way(osmium::Way &way, valid_range_t const &range,
                              bool last_version)
 {
+    m_mid->way_history(way);
+
     if (last_version) {
         m_mid->way(way);
     }

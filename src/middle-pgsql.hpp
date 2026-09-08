@@ -20,6 +20,7 @@
 
 #include <map>
 #include <memory>
+#include <unordered_map>
 
 #include <osmium/index/nwr_array.hpp>
 
@@ -60,6 +61,9 @@ public:
 
     size_t nodes_get_list(osmium::WayNodeList *nodes) const override;
 
+    size_t nodes_get_list_as_of(osmium::WayNodeList *nodes,
+                               osmium::Timestamp as_of) const override;
+
     bool node_get(osmid_t id, osmium::memory::Buffer *buffer) const override;
 
     bool way_get(osmid_t id, osmium::memory::Buffer *buffer) const override;
@@ -67,6 +71,11 @@ public:
     size_t rel_members_get(osmium::Relation const &rel,
                            osmium::memory::Buffer *buffer,
                            osmium::osm_entity_bits::type types) const override;
+
+    size_t rel_members_get_as_of(osmium::Relation const &rel,
+                                 osmium::memory::Buffer *buffer,
+                                 osmium::osm_entity_bits::type types,
+                                 osmium::Timestamp as_of) const override;
 
     bool relation_get(osmid_t id,
                       osmium::memory::Buffer *buffer) const override;
@@ -78,6 +87,14 @@ private:
     osmium::Location get_node_location_db(osmid_t id) const;
     std::size_t get_way_node_locations_flatnodes(osmium::WayNodeList *nodes) const;
     std::size_t get_way_node_locations_db(osmium::WayNodeList *nodes) const;
+
+    /**
+     * Get the node locations valid at the given time from the node
+     * history table for all ids in the list.
+     */
+    std::unordered_map<osmid_t, osmium::Location>
+    get_node_locations_as_of_db(idlist_t const &ids,
+                                osmium::Timestamp as_of) const;
 
     pg_conn_t m_db_connection;
     std::shared_ptr<node_locations_t> m_cache;
@@ -99,6 +116,9 @@ struct middle_pgsql_t : public middle_t
     void node(osmium::Node const &node) override;
     void way(osmium::Way const &way) override;
     void relation(osmium::Relation const &rel) override;
+
+    void node_history(osmium::Node const &node) override;
+    void way_history(osmium::Way const &way) override;
 
     void after_nodes() override;
     void after_ways() override;
@@ -182,6 +202,10 @@ private:
     std::map<osmium::user_id_type, std::string> m_users;
     osmium::nwr_array<table_desc_t> m_tables;
 
+    /// History tables for the temporal import (empty unless --temporal).
+    table_desc_t m_nodes_history;
+    table_desc_t m_ways_history;
+
     options_t const *m_options;
 
     std::shared_ptr<node_locations_t> m_cache;
@@ -192,6 +216,13 @@ private:
     // middle keeps its own thread for writing to the database.
     std::shared_ptr<db_copy_thread_t> m_copy_thread;
     db_copy_mgr_t<db_deleter_by_id_t> m_db_copy;
+
+    /**
+     * Separate copy manager for the history tables. History and current
+     * writes interleave per object; a single copy manager would flush a
+     * new COPY command on every table change.
+     */
+    db_copy_mgr_t<db_deleter_by_id_t> m_db_copy_history;
 
     /// Options for this middle.
     middle_pgsql_options m_store_options;
