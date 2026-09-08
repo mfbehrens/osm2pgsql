@@ -502,19 +502,6 @@ void middle_pgsql_t::node_set(osmium::Node const &node)
     m_db_copy.finish_line();
 }
 
-void middle_pgsql_t::node_history(osmium::Node const &node)
-{
-    assert(m_middle_state == middle_state::node);
-
-    m_db_copy_history.new_line(m_nodes_history.copy_target());
-
-    m_db_copy_history.add_columns(node.id(), node.timestamp().to_iso(),
-                                  node.version(), node.visible() ? 1 : 0,
-                                  node.location().y(), node.location().x());
-
-    m_db_copy_history.finish_line();
-}
-
 std::size_t middle_query_pgsql_t::get_way_node_locations_flatnodes(
     osmium::WayNodeList *nodes) const
 {
@@ -569,60 +556,6 @@ size_t middle_query_pgsql_t::nodes_get_list(osmium::WayNodeList *nodes) const
 {
     return m_persistent_cache ? get_way_node_locations_flatnodes(nodes)
                               : get_way_node_locations_db(nodes);
-}
-
-std::unordered_map<osmid_t, osmium::Location>
-middle_query_pgsql_t::get_node_locations_as_of_db(
-    idlist_t const &ids, osmium::Timestamp as_of) const
-{
-    std::unordered_map<osmid_t, osmium::Location> locs;
-
-    if (ids.empty()) {
-        return locs;
-    }
-
-    util::string_joiner_t id_list{',', '\0', '{', '}'};
-    for (auto const id : ids) {
-        id_list.add(fmt::to_string(id));
-    }
-
-    auto const res = m_db_connection.exec_prepared("get_node_list_as_of",
-                                                   id_list(), as_of.to_iso());
-    for (int i = 0; i < res.num_tuples(); ++i) {
-        locs.emplace(osmium::string_to_object_id(res.get_value(i, 0)),
-                     osmium::Location{
-                         (int)std::strtol(res.get_value(i, 1), nullptr, 10),
-                         (int)std::strtol(res.get_value(i, 2), nullptr, 10)});
-    }
-
-    return locs;
-}
-
-size_t middle_query_pgsql_t::nodes_get_list_as_of(
-    osmium::WayNodeList *nodes, osmium::Timestamp as_of) const
-{
-    if (nodes->empty()) {
-        return 0;
-    }
-
-    idlist_t ids;
-    ids.reserve(nodes->size());
-    for (auto const &n : *nodes) {
-        ids.push_back(n.ref());
-    }
-
-    auto const locs = get_node_locations_as_of_db(ids, as_of);
-
-    size_t count = 0;
-    for (auto &n : *nodes) {
-        auto const el = locs.find(n.ref());
-        if (el != locs.end()) {
-            n.set_location(el->second);
-            ++count;
-        }
-    }
-
-    return count;
 }
 
 void middle_pgsql_t::node_delete(osmid_t osm_id)
@@ -787,24 +720,6 @@ void middle_pgsql_t::way_set(osmium::Way const &way)
     m_db_copy.finish_line();
 }
 
-void middle_pgsql_t::way_history(osmium::Way const &way)
-{
-    assert(m_middle_state == middle_state::way);
-
-    m_db_copy_history.new_line(m_ways_history.copy_target());
-
-    m_db_copy_history.add_columns(way.id(), way.timestamp().to_iso(),
-                                  way.version(), way.visible() ? 1 : 0);
-
-    m_db_copy_history.new_array();
-    for (auto const &n : way.nodes()) {
-        m_db_copy_history.add_array_elem(n.ref());
-    }
-    m_db_copy_history.finish_array();
-
-    m_db_copy_history.finish_line();
-}
-
 namespace {
 
 /**
@@ -839,18 +754,6 @@ void build_way(osmid_t id, pg_result_t const &res, int res_num, int offset,
     }
     pgsql_parse_nodes(res.get_value(res_num, offset + 0), buffer, &builder);
     pgsql_parse_json_tags(res.get_value(res_num, offset + 1), buffer, &builder);
-}
-
-/**
- * Build way in buffer from way history table results (columns: way_id,
- * visible, nodes). The way gets no locations on its nodes.
- */
-void build_history_way(osmid_t id, pg_result_t const &res, int res_num,
-                       osmium::memory::Buffer *buffer)
-{
-    osmium::builder::WayBuilder builder{*buffer};
-    builder.set_id(id);
-    pgsql_parse_nodes(res.get_value(res_num, 2), buffer, &builder);
 }
 
 } // anonymous namespace
@@ -960,91 +863,6 @@ middle_query_pgsql_t::rel_members_get(osmium::Relation const &rel,
     return members_found;
 }
 
-std::size_t middle_query_pgsql_t::rel_members_get_as_of(
-    osmium::Relation const &rel, osmium::memory::Buffer *buffer,
-    osmium::osm_entity_bits::type types, osmium::Timestamp as_of) const
-{
-    assert(buffer);
-    assert((types & osmium::osm_entity_bits::relation) == 0);
-
-    pg_result_t res;
-    if (types & osmium::osm_entity_bits::way) {
-        // collect ids from all way members into a list..
-        util::string_joiner_t way_ids{',', '\0', '{', '}'};
-        for (auto const &member : rel.members()) {
-            if (member.type() == osmium::item_type::way) {
-                way_ids.add(fmt::to_string(member.ref()));
-            }
-        }
-
-        // ...and get the way versions valid at that time from the database
-        if (!way_ids.empty()) {
-            res = m_db_connection.exec_prepared("get_way_list_as_of",
-                                                way_ids(), as_of.to_iso());
-        }
-    }
-
-    idlist_t wayidspg;
-    if (res) {
-        wayidspg = get_ids_from_result(res);
-    }
-
-    std::size_t members_found = 0;
-    for (auto const &member : rel.members()) {
-        if (member.type() == osmium::item_type::node &&
-            (types & osmium::osm_entity_bits::node)) {
-            osmium::builder::NodeBuilder builder{*buffer};
-            builder.set_id(member.ref());
-            ++members_found;
-        } else if (member.type() == osmium::item_type::way &&
-                   (types & osmium::osm_entity_bits::way) && res) {
-            // Match the list of ways coming from postgres in a different
-            // order back to the list of ways given by the caller
-            for (int j = 0; j < res.num_tuples(); ++j) {
-                if (member.ref() == wayidspg[static_cast<std::size_t>(j)]) {
-                    build_history_way(member.ref(), res, j, buffer);
-                    ++members_found;
-                    break;
-                }
-            }
-        }
-    }
-
-    buffer->commit();
-
-    // Resolve the locations of all needed nodes as of the given time in
-    // one query: the locations of relation member nodes and of the nodes
-    // of all member ways built above.
-    idlist_t node_ids;
-    for (auto const &node : buffer->select<osmium::Node>()) {
-        node_ids.push_back(node.id());
-    }
-    for (auto &way : buffer->select<osmium::Way>()) {
-        for (auto const &nr : way.nodes()) {
-            node_ids.push_back(nr.ref());
-        }
-    }
-
-    auto const locs = get_node_locations_as_of_db(node_ids, as_of);
-
-    for (auto &node : buffer->select<osmium::Node>()) {
-        auto const el = locs.find(node.id());
-        if (el != locs.end()) {
-            node.set_location(el->second);
-        }
-    }
-    for (auto &way : buffer->select<osmium::Way>()) {
-        for (auto &nr : way.nodes()) {
-            auto const el = locs.find(nr.ref());
-            if (el != locs.end()) {
-                nr.set_location(el->second);
-            }
-        }
-    }
-
-    return members_found;
-}
-
 void middle_pgsql_t::way_delete(osmid_t osm_id)
 {
     assert(m_options->append);
@@ -1118,14 +936,9 @@ void middle_pgsql_t::after_nodes()
 #endif
 
     m_db_copy.sync();
-    m_db_copy_history.sync();
     if (!m_options->append && m_store_options.nodes) {
         auto const &table = m_tables.nodes();
         analyze_table(m_db_connection, table.schema(), table.name());
-    }
-    if (!m_options->append && m_options->temporal) {
-        analyze_table(m_db_connection, m_nodes_history.schema(),
-                      m_nodes_history.name());
     }
 
     m_cache->log_stats();
@@ -1139,14 +952,9 @@ void middle_pgsql_t::after_ways()
 #endif
 
     m_db_copy.sync();
-    m_db_copy_history.sync();
     if (!m_options->append) {
         auto const &table = m_tables.ways();
         analyze_table(m_db_connection, table.schema(), table.name());
-    }
-    if (!m_options->append && m_options->temporal) {
-        analyze_table(m_db_connection, m_ways_history.schema(),
-                      m_ways_history.name());
     }
 }
 
@@ -1158,7 +966,6 @@ void middle_pgsql_t::after_relations()
 #endif
 
     m_db_copy.sync();
-    m_db_copy_history.sync();
     if (!m_options->append) {
         auto const &table = m_tables.relations();
         analyze_table(m_db_connection, table.schema(), table.name());
@@ -1244,31 +1051,6 @@ void middle_pgsql_t::start()
            " members jsonb NOT NULL,"
            " tags jsonb"
            ") {data_tablespace}");
-
-    if (m_options->temporal) {
-        log_debug("Setting up table 'nodes_history'");
-        dbexec(R"(DROP TABLE IF EXISTS {schema}"{prefix}_nodes_history" CASCADE)");
-        dbexec("CREATE {unlogged} TABLE {schema}\"{prefix}_nodes_history\" ("
-               " node_id int8 NOT NULL,"
-               " ts timestamp NOT NULL,"
-               " version int4 NOT NULL,"
-               " visible boolean NOT NULL,"
-               " lat int4 NOT NULL,"
-               " lon int4 NOT NULL,"
-               " PRIMARY KEY (node_id, ts, version) {using_tablespace}"
-               ") {data_tablespace}");
-
-        log_debug("Setting up table 'ways_history'");
-        dbexec(R"(DROP TABLE IF EXISTS {schema}"{prefix}_ways_history" CASCADE)");
-        dbexec("CREATE {unlogged} TABLE {schema}\"{prefix}_ways_history\" ("
-               " way_id int8 NOT NULL,"
-               " ts timestamp NOT NULL,"
-               " version int4 NOT NULL,"
-               " visible boolean NOT NULL,"
-               " nodes int8[] NOT NULL,"
-               " PRIMARY KEY (way_id, ts, version) {using_tablespace}"
-               ") {data_tablespace}");
-    }
 
     if (m_store_options.with_attributes) {
         log_debug("Setting up table 'users'");
@@ -1390,10 +1172,6 @@ void middle_pgsql_t::stop()
         for (auto const &table : m_tables) {
             table.drop_table(m_db_connection);
         }
-        if (m_options->temporal) {
-            m_nodes_history.drop_table(m_db_connection);
-            m_ways_history.drop_table(m_db_connection);
-        }
     } else if (!m_options->append) {
         build_way_node_index();
         build_relation_member_indexes();
@@ -1457,8 +1235,7 @@ middle_pgsql_t::middle_pgsql_t(std::shared_ptr<thread_pool_t> thread_pool,
       static_cast<std::size_t>(options->cache) * 1024UL * 1024UL)),
   m_db_connection(m_options->connection_params, "middle.main"),
   m_copy_thread(std::make_shared<db_copy_thread_t>(options->connection_params)),
-  m_db_copy(m_copy_thread), m_db_copy_history(m_copy_thread),
-  m_append(options->append)
+  m_db_copy(m_copy_thread), m_append(options->append)
 {
     m_store_options.with_attributes = options->extra_attributes;
 
@@ -1482,11 +1259,6 @@ middle_pgsql_t::middle_pgsql_t(std::shared_ptr<thread_pool_t> thread_pool,
     m_tables.nodes() = table_desc_t{*options, "nodes"};
     m_tables.ways() = table_desc_t{*options, "ways"};
     m_tables.relations() = table_desc_t{*options, "rels"};
-
-    if (options->temporal) {
-        m_nodes_history = table_desc_t{*options, "nodes_history"};
-        m_ways_history = table_desc_t{*options, "ways_history"};
-    }
 }
 
 void middle_pgsql_t::set_requirements(
@@ -1544,32 +1316,6 @@ std::shared_ptr<middle_query_t> middle_pgsql_t::get_query_instance()
                                  " FROM {schema}\"{prefix}_rels\" o"
                                  " {users_table_access}"
                                  " WHERE o.id = $1::int8"));
-
-    if (m_options->temporal) {
-        // The visible filter has to be applied after picking the newest
-        // version, because a deleted version must hide the older visible
-        // versions for times after its deletion.
-        mid->prepare("get_node_list_as_of",
-                     render_template(
-                         "SELECT node_id, lon, lat FROM ("
-                         " SELECT DISTINCT ON (node_id) node_id, lon, lat,"
-                         " visible"
-                         " FROM {schema}\"{prefix}_nodes_history\""
-                         " WHERE node_id = ANY($1::int8[])"
-                         " AND ts <= $2::timestamp"
-                         " ORDER BY node_id, ts DESC, version DESC"
-                         ") t WHERE visible"));
-
-        mid->prepare("get_way_list_as_of",
-                     render_template(
-                         "SELECT way_id, visible, nodes FROM ("
-                         " SELECT DISTINCT ON (way_id) way_id, visible, nodes"
-                         " FROM {schema}\"{prefix}_ways_history\""
-                         " WHERE way_id = ANY($1::int8[])"
-                         " AND ts <= $2::timestamp"
-                         " ORDER BY way_id, ts DESC, version DESC"
-                         ") t WHERE visible"));
-    }
 
     return std::shared_ptr<middle_query_t>(mid.release());
 }

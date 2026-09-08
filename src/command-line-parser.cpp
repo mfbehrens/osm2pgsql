@@ -212,6 +212,18 @@ void check_options(options_t *options)
             "--temporal can not be used together with --append (yet)."};
     }
 
+    if (options->temporal && !options->flat_node_file.empty()) {
+        throw std::runtime_error{
+            "--temporal can not be used together with --flat-nodes: the "
+            "history middle stores no current node locations."};
+    }
+
+    if (options->temporal && options->middle_with_nodes) {
+        throw std::runtime_error{
+            "--temporal can not be used together with --middle-with-nodes: "
+            "the history middle always stores all node versions."};
+    }
+
     if (options->cache < 0) {
         throw std::runtime_error{"RAM cache cannot be negative."};
     }

@@ -53,21 +53,19 @@ public:
      * Temporal history import: Process one version of an object. Every
      * visible version is forwarded to the output together with its
      * validity range (available to the flex output as object:valid_at()).
-     * The middle only ever needs the last version of an object, because
-     * it stores the current state only. Deleted versions are tombstones:
-     * they end the validity of the previous version (which is already
-     * recorded in its range) and do not get their own output row.
+     * The middle stores every version in its history tables (there are
+     * no current-state middle tables in temporal mode). Deleted versions
+     * are tombstones: they end the validity of the previous version
+     * (which is already recorded in its range) and do not get their own
+     * output row.
      *
      * \param object The object version.
      * \param range Validity range of this version.
-     * \param last_version Is this the newest version of the object?
      */
-    void temporal_node(osmium::Node const &node, valid_range_t const &range,
-                       bool last_version);
-    void temporal_way(osmium::Way &way, valid_range_t const &range,
-                      bool last_version);
+    void temporal_node(osmium::Node const &node, valid_range_t const &range);
+    void temporal_way(osmium::Way &way, valid_range_t const &range);
     void temporal_relation(osmium::Relation const &rel,
-                           valid_range_t const &range, bool last_version);
+                           valid_range_t const &range);
 
     void after_nodes();
     void after_ways();

@@ -179,22 +179,19 @@ void history_parser_t::flush_group()
     for (std::size_t i = 0; i < num_versions; ++i) {
         auto objects = m_copies[i].select<osmium::OSMObject>();
         auto &object = *objects.begin();
-        bool const last_version = (i + 1 == num_versions);
 
         switch (m_current_type) {
         case osmium::item_type::node:
             m_osmdata->temporal_node(
-                static_cast<osmium::Node const &>(object), ranges[i],
-                last_version);
+                static_cast<osmium::Node const &>(object), ranges[i]);
             break;
         case osmium::item_type::way:
             m_osmdata->temporal_way(static_cast<osmium::Way &>(object),
-                                    ranges[i], last_version);
+                                    ranges[i]);
             break;
         case osmium::item_type::relation:
             m_osmdata->temporal_relation(
-                static_cast<osmium::Relation const &>(object), ranges[i],
-                last_version);
+                static_cast<osmium::Relation const &>(object), ranges[i]);
             break;
         default:
             break;

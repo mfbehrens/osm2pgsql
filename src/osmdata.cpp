@@ -73,28 +73,25 @@ void osmdata_t::node(osmium::Node const &node)
 }
 
 void osmdata_t::temporal_node(osmium::Node const &node,
-                              valid_range_t const &range, bool last_version)
+                              valid_range_t const &range)
 {
     // Every version goes into the node history, even those filtered out
     // below: as-of geometry lookups need the complete location history.
     m_mid->node_history(node);
 
-    if (node.visible()) {
-        if (!node.location().valid()) {
-            log_warn("Ignored node {} (version {}) with invalid location.",
-                     node.id(), node.version());
-            return;
-        }
-        if (m_bbox.valid() && !m_bbox.contains(node.location())) {
-            return;
-        }
-    }
-
-    if (last_version) {
-        m_mid->node(node);
-    }
-
     if (node.deleted()) {
+        // A deleted version is a tombstone: it ends the validity of the
+        // previous version (already stored in its valid_at range) and
+        // does not get its own database row.
+        return;
+    }
+
+    if (!node.location().valid()) {
+        log_warn("Ignored node {} (version {}) with invalid location.",
+                 node.id(), node.version());
+        return;
+    }
+    if (m_bbox.valid() && !m_bbox.contains(node.location())) {
         return;
     }
 
@@ -103,16 +100,12 @@ void osmdata_t::temporal_node(osmium::Node const &node,
     current_valid_range = nullptr;
 }
 
-void osmdata_t::temporal_way(osmium::Way &way, valid_range_t const &range,
-                             bool last_version)
+void osmdata_t::temporal_way(osmium::Way &way, valid_range_t const &range)
 {
     m_mid->way_history(way);
 
-    if (last_version) {
-        m_mid->way(way);
-    }
-
     if (way.deleted()) {
+        // Tombstone: closes the previous version's range, no own row.
         return;
     }
 
@@ -122,7 +115,7 @@ void osmdata_t::temporal_way(osmium::Way &way, valid_range_t const &range,
 }
 
 void osmdata_t::temporal_relation(osmium::Relation const &rel,
-                                  valid_range_t const &range, bool last_version)
+                                   valid_range_t const &range)
 {
     if (rel.members().size() > 32767) {
         log_warn(
@@ -131,11 +124,8 @@ void osmdata_t::temporal_relation(osmium::Relation const &rel,
         return;
     }
 
-    if (last_version) {
-        m_mid->relation(rel);
-    }
-
     if (rel.deleted()) {
+        // Tombstone: closes the previous version's range, no own row.
         return;
     }
 

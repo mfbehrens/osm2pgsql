@@ -7,6 +7,7 @@
  * For a full list of authors see the git log.
  */
 
+#include "middle-pgsql-history.hpp"
 #include "middle-pgsql.hpp"
 #include "middle-ram.hpp"
 #include "middle.hpp"
@@ -20,6 +21,11 @@ std::shared_ptr<middle_t>
 create_middle(std::shared_ptr<thread_pool_t> thread_pool,
               options_t const &options)
 {
+    if (options.temporal) {
+        return std::make_shared<middle_pgsql_history_t>(
+            std::move(thread_pool), &options);
+    }
+
     if (options.slim) {
         return std::make_shared<middle_pgsql_t>(std::move(thread_pool),
                                                 &options);

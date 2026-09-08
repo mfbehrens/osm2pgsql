@@ -40,6 +40,7 @@ target_sources(osm2pgsql_lib PRIVATE
     logging.cpp
     lua-setup.cpp
     lua-utils.cpp
+    middle-pgsql-history.cpp
     middle-pgsql.cpp
     middle-ram.cpp
     middle.cpp
