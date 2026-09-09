@@ -117,11 +117,11 @@ public:
                                  osmium::osm_entity_bits::type types,
                                  osmium::Timestamp as_of) const override;
 
-    std::map<osmid_t, std::vector<osmium::Timestamp>>
-    node_version_timestamps(idlist_t const &ids) const override;
+    node_history_map_t const &
+    load_node_history(idlist_t const &ids) const override;
 
-    std::map<osmid_t, std::vector<way_history_version_t>>
-    way_histories(idlist_t const &ids) const override;
+    way_history_map_t const &
+    load_way_history(idlist_t const &ids) const override;
 
     bool relation_get(osmid_t id,
                       osmium::memory::Buffer *buffer) const override;
@@ -129,9 +129,35 @@ public:
     void prepare(std::string const &stmt, std::string const &sql_cmd) const;
 
 private:
-    std::unordered_map<osmid_t, osmium::Location>
-    get_node_locations_as_of_db(idlist_t const &ids,
-                                osmium::Timestamp as_of) const;
+    /**
+     * Query the node history of the given ids and append it to the node
+     * cache. Rows must be appended in (ts, version) order per node id,
+     * which the database result already guarantees.
+     */
+    void query_node_history(idlist_t const &ids) const;
+
+    /// Same as query_node_history() for ways.
+    void query_way_history(idlist_t const &ids) const;
+
+    /**
+     * Make sure the history of all given nodes is in the node cache.
+     * Nodes without any history rows get an empty cache entry, so they
+     * are not queried again.
+     */
+    void ensure_nodes_cached(idlist_t const &ids) const;
+
+    /// Same as ensure_nodes_cached() for ways.
+    void ensure_ways_cached(idlist_t const &ids) const;
+
+    /**
+     * Node history cache of the current replay batch. Filled by
+     * load_node_history() (called once per batch) and consulted by the
+     * as-of queries. Mutable, because the as-of query interface is const.
+     */
+    mutable node_history_map_t m_node_cache;
+
+    /// Way history cache of the current replay batch.
+    mutable way_history_map_t m_way_cache;
 
     pg_conn_t m_db_connection;
 }; // class middle_query_pgsql_history_t

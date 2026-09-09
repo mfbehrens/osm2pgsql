@@ -105,38 +105,6 @@ void osmdata_t::temporal_way_history(osmium::Way const &way)
     m_mid->way_history(way);
 }
 
-void osmdata_t::temporal_way(osmium::Way &way, valid_range_t const &range)
-{
-    if (way.deleted()) {
-        // Tombstone: closes the previous version's range, no own row.
-        return;
-    }
-
-    current_valid_range = &range;
-    m_output->way_add(&way);
-    current_valid_range = nullptr;
-}
-
-void osmdata_t::temporal_relation(osmium::Relation const &rel,
-                                   valid_range_t const &range)
-{
-    if (rel.members().size() > 32767) {
-        log_warn(
-            "Relation id {} ignored, because it has more than 32767 members",
-            rel.id());
-        return;
-    }
-
-    if (rel.deleted()) {
-        // Tombstone: closes the previous version's range, no own row.
-        return;
-    }
-
-    current_valid_range = &range;
-    m_output->relation_add(rel);
-    current_valid_range = nullptr;
-}
-
 void osmdata_t::after_nodes()
 {
     m_mid->after_nodes();

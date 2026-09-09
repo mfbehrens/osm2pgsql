@@ -52,7 +52,10 @@
 namespace {
 
 // Mutex used to coordinate access to Lua code
-std::mutex lua_mutex;
+// Worker threads of the temporal history import each have their own
+// output instance with their own Lua state; the mutex protecting the
+// Lua state lives per instance (shared with its clones, which share
+// the Lua state).
 
 // Lua can't call functions on C++ objects directly. This macro defines simple
 // C "trampoline" functions which are called from Lua which get the current
@@ -240,29 +243,31 @@ typename CONTAINER::value_type &get_from_idx_param(lua_State *lua_state,
 }
 
 std::size_t get_nodes(middle_query_t const &middle, osmium::Way *way,
-                      osmium::Timestamp const *as_of = nullptr)
+                       osmium::Timestamp const *as_of = nullptr)
 {
     constexpr std::size_t MAX_MISSING_NODES = 100;
-    static std::size_t count_missing_nodes = 0;
+    static std::atomic<std::size_t> count_missing_nodes{0};
 
     auto const count =
         as_of != nullptr
             ? middle.nodes_get_list_as_of(&way->nodes(), *as_of)
             : middle.nodes_get_list(&way->nodes());
 
-    if (count_missing_nodes <= MAX_MISSING_NODES &&
+    if (count_missing_nodes.load(std::memory_order_relaxed) <=
+            MAX_MISSING_NODES &&
         count != way->nodes().size()) {
         util::string_joiner_t id_list{','};
         for (auto const &nr : way->nodes()) {
             if (!nr.location().valid()) {
                 id_list.add(fmt::to_string(nr.ref()));
-                ++count_missing_nodes;
+                count_missing_nodes.fetch_add(1, std::memory_order_relaxed);
             }
         }
 
         log_debug("Missing nodes in way {}: {}", way->id(), id_list());
 
-        if (count_missing_nodes > MAX_MISSING_NODES) {
+        if (count_missing_nodes.load(std::memory_order_relaxed) >
+            MAX_MISSING_NODES) {
             log_debug("Reported more than {} missing nodes, no further missing "
                       "nodes will be reported!",
                       MAX_MISSING_NODES);
@@ -303,8 +308,12 @@ void create_expire_tables(std::vector<expire_output_t> const &expire_outputs,
 void check_for_object(lua_State *lua_state, char const *const function_name)
 {
     // This is used to make sure we are printing warnings only once per
-    // function name.
+    // function name. Multiple output instances can call this from
+    // different threads, so the static set needs a mutex.
+    static std::mutex message_mutex;
     static std::set<std::string> message_shown;
+
+    std::lock_guard<std::mutex> const message_guard{message_mutex};
     if (message_shown.count(function_name)) {
         return;
     }
@@ -959,14 +968,14 @@ void output_flex_t::call_lua_function(prepared_lua_function_t func,
 void output_flex_t::get_mutex_and_call_lua_function(
     prepared_lua_function_t func)
 {
-    std::lock_guard<std::mutex> const guard{lua_mutex};
+    std::lock_guard<std::mutex> const guard{*m_lua_mutex};
     call_lua_function(func);
 }
 
 void output_flex_t::get_mutex_and_call_lua_function(
     prepared_lua_function_t func, osmium::OSMObject const &object)
 {
-    std::lock_guard<std::mutex> const guard{lua_mutex};
+    std::lock_guard<std::mutex> const guard{*m_lua_mutex};
     call_lua_function(func, object);
 }
 
@@ -997,7 +1006,7 @@ void output_flex_t::select_relation_members()
 
     // We can not use get_mutex_and_call_lua_function() here, because we need
     // the mutex to stick around as long as we are looking at the Lua stack.
-    std::lock_guard<std::mutex> const guard{lua_mutex};
+    std::lock_guard<std::mutex> const guard{*m_lua_mutex};
     call_lua_function(m_select_relation_members, m_relation_cache.get());
 
     // If the function returned nil there is nothing to be marked.
@@ -1353,6 +1362,7 @@ output_flex_t::output_flex_t(output_flex_t const *other,
   m_db_connection(get_options()->connection_params, "out.flex.thread"),
   m_stage2_way_ids(other->m_stage2_way_ids),
   m_copy_thread(std::move(copy_thread)), m_lua_state(other->m_lua_state),
+  m_lua_mutex(other->m_lua_mutex),
   m_area_buffer(1024, osmium::memory::Buffer::auto_grow::yes),
   m_process_node(other->m_process_node), m_process_way(other->m_process_way),
   m_process_relation(other->m_process_relation),
@@ -1393,6 +1403,7 @@ output_flex_t::output_flex_t(std::shared_ptr<middle_query_t> const &mid,
 : output_t(mid, std::move(thread_pool), options),
   m_db_connection(get_options()->connection_params, "out.flex.main"),
   m_copy_thread(std::make_shared<db_copy_thread_t>(options.connection_params)),
+  m_lua_mutex(std::make_shared<std::mutex>()),
   m_area_buffer(1024, osmium::memory::Buffer::auto_grow::yes)
 {
     init_lua(options.style, properties);

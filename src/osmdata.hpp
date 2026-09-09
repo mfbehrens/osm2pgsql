@@ -70,15 +70,6 @@ public:
      */
     void temporal_way_history(osmium::Way const &way);
 
-    /**
-     * Replay a way (segment) with the given validity range. Geometry
-     * change events split a version's range into several segments, each
-     * replayed separately; only visible versions produce output.
-     */
-    void temporal_way(osmium::Way &way, valid_range_t const &range);
-    void temporal_relation(osmium::Relation const &rel,
-                           valid_range_t const &range);
-
     void after_nodes();
     void after_ways();
     void after_relations();

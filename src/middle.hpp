@@ -23,6 +23,21 @@
 #include "thread-pool.hpp"
 
 /**
+ * One node version as stored in the node history table: when it was
+ * created, whether it is visible and where the node was at that time.
+ * Used by the temporal history import to resolve node locations as of
+ * any point in time.
+ */
+struct node_history_version_t
+{
+    osmium::Timestamp ts{};
+    uint32_t version = 0;
+    bool visible = true;
+    int32_t lat = 0;
+    int32_t lon = 0;
+};
+
+/**
  * One way version as stored in the way history table: when it was
  * created, whether it is visible and its node list. Used by the temporal
  * history import to compute geometry change events of relations.
@@ -33,6 +48,14 @@ struct way_history_version_t
     bool visible = true;
     std::vector<osmid_t> nodes;
 };
+
+/// Version history of a set of nodes, per node id sorted by (ts, version).
+using node_history_map_t =
+    std::map<osmid_t, std::vector<node_history_version_t>>;
+
+/// Version history of a set of ways, per way id sorted by (ts, version).
+using way_history_map_t =
+    std::map<osmid_t, std::vector<way_history_version_t>>;
 
 class idlist_t;
 
@@ -142,30 +165,37 @@ struct middle_query_t : std::enable_shared_from_this<middle_query_t>
     }
 
     /**
-     * Get the timestamps of all versions of the given nodes, including
-     * invisible (deleted) versions. Used by the temporal history import
-     * to compute geometry change events: every node version potentially
-     * changes the geometry of the ways referencing it.
+     * Load the complete version history of the given nodes (including
+     * invisible versions) into the query cache of this middle and return
+     * it. Subsequent nodes_get_list_as_of() and rel_members_get_as_of()
+     * calls for these nodes are served from the cache without database
+     * round trips; the cache is replaced by the next call. Used by the
+     * temporal history import.
      *
-     * \return Timestamps per node id, sorted arbitrarily.
+     * \return Version history per node id, sorted by (ts, version).
+     *         The reference stays valid until the next call.
      */
-    virtual std::map<osmid_t, std::vector<osmium::Timestamp>>
-    node_version_timestamps(idlist_t const & /*ids*/) const
+    virtual node_history_map_t const &
+    load_node_history(idlist_t const & /*ids*/) const
     {
-        return {};
+        static node_history_map_t const empty;
+        return empty;
     }
 
     /**
-     * Get all versions of the given ways with their node lists, including
-     * invisible (deleted) versions. Used by the temporal history import
-     * to compute geometry change events of relations.
+     * Load the complete version history of the given ways (including
+     * invisible versions) into the query cache of this middle and return
+     * it. Subsequent rel_members_get_as_of() calls for these ways are
+     * served from the cache. Used by the temporal history import.
      *
-     * \return Way versions per way id in file order (sorted by timestamp).
+     * \return Version history per way id, sorted by (ts, version).
+     *         The reference stays valid until the next call.
      */
-    virtual std::map<osmid_t, std::vector<way_history_version_t>>
-    way_histories(idlist_t const & /*ids*/) const
+    virtual way_history_map_t const &
+    load_way_history(idlist_t const & /*ids*/) const
     {
-        return {};
+        static way_history_map_t const empty;
+        return empty;
     }
 
     /**

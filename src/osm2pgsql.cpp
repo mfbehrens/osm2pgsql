@@ -82,9 +82,11 @@ file_info run(options_t const &options, properties_t *properties)
         }
         // Temporal history import: read the history file, compute the
         // validity range for every object version and replay all versions
-        // through the osmdata temporal processing.
+        // through the osmdata temporal processing. Ways and relations are
+        // replayed in batches by parallel worker threads.
         progress_display_t progress{get_logger().show_progress()};
-        history_parser_t parser{&osmdata, middle_query.get(), &progress};
+        history_parser_t parser{&osmdata, middle, thread_pool, options,
+                                *properties, &progress};
         parser.parse(files.front());
     } else {
         // Processing: In this phase the input file(s) are read and parsed,

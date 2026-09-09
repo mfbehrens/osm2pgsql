@@ -26,6 +26,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -315,6 +316,13 @@ private:
     // This is shared between all clones of the output and must only be
     // accessed while protected using the lua_mutex.
     std::shared_ptr<lua_State> m_lua_state;
+
+    /**
+     * Mutex protecting the Lua state. Clones share the Lua state (and
+     * therefore the mutex) of their parent; fully independent output
+     * instances (temporal history import workers) have their own.
+     */
+    std::shared_ptr<std::mutex> m_lua_mutex;
 
     // Caches for old and new geometries from a single OSM object
     geometry_cache_t m_geometry_cache;
